@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss>
+  <channel>
+    <item>
+      <TenderID>CPPP-PRINT-001</TenderID>
+      <title>Offset printing of government forms</title>
+      <OrganisationName>Directorate of Printing</OrganisationName>
+      <State>Delhi</State>
+      <BidSubmissionClosingDate>31 December 2026 17:00</BidSubmissionClosingDate>
+      <PublishedDate>01 May 2026</PublishedDate>
+      <link>https://eprocure.gov.in/example</link>
+    </item>
+  </channel>
+</rss>
