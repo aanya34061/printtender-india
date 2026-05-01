@@ -22,18 +22,21 @@ async def run_fetch_cycle() -> int:
     async with async_session() as session:
         for tender in tenders:
             stmt = insert(Tender).values(**tender.model_dump()).on_conflict_do_update(
-                index_elements=["source", "external_id"],
+                index_elements=["ref_number"],
                 set_={
                     "title": tender.title,
-                    "buyer": tender.buyer,
+                    "organisation": tender.organisation,
                     "state": tender.state,
+                    "portal_source": tender.portal_source,
                     "category": tender.category,
-                    "estimated_value": tender.estimated_value,
-                    "deadline": tender.deadline,
-                    "published_at": tender.published_at,
-                    "tender_url": tender.tender_url,
+                    "value_inr": tender.value_inr,
+                    "emd_amount": tender.emd_amount,
+                    "bid_end_date": tender.bid_end_date,
+                    "published_date": tender.published_date,
+                    "portal_url": tender.portal_url,
                     "keywords": tender.keywords,
-                    "raw_payload": tender.raw_payload,
+                    "relevance_score": tender.relevance_score,
+                    "is_active": tender.is_active,
                 },
             )
             await session.execute(stmt)
