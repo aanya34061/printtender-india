@@ -1,14 +1,30 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<rss>
-  <channel>
-    <item>
-      <TenderID>CPPP-PRINT-001</TenderID>
-      <title>Offset printing of government forms</title>
-      <OrganisationName>Directorate of Printing</OrganisationName>
-      <State>Delhi</State>
-      <BidSubmissionClosingDate>31 December 2026 17:00</BidSubmissionClosingDate>
-      <PublishedDate>01 May 2026</PublishedDate>
-      <link>https://eprocure.gov.in/example</link>
-    </item>
-  </channel>
-</rss>
+<Tenders>
+  <Tender>
+    <TenderRefNo>CPPP-PRINT-001</TenderRefNo>
+    <TenderTitle>Offset printing of government forms and registers</TenderTitle>
+    <OrganisationName>Directorate of Printing</OrganisationName>
+    <State>Delhi</State>
+    <BidEndDate>31 December 2026 17:00</BidEndDate>
+    <TenderValue>1250000</TenderValue>
+    <TenderUrl>https://eprocure.gov.in/eprocure/app?component=%24DirectLink&amp;page=FrontEndViewTender&amp;service=direct&amp;sp=CPPP-PRINT-001</TenderUrl>
+  </Tender>
+  <Tender>
+    <TenderRefNo>CPPP-PRINT-002</TenderRefNo>
+    <TenderTitle>Book printing and binding for government schools</TenderTitle>
+    <OrganisationName>Department of School Education</OrganisationName>
+    <State>Maharashtra</State>
+    <BidEndDate>15 January 2027 15:00</BidEndDate>
+    <TenderValue>4800000</TenderValue>
+    <TenderUrl>https://eprocure.gov.in/eprocure/app?component=%24DirectLink&amp;page=FrontEndViewTender&amp;service=direct&amp;sp=CPPP-PRINT-002</TenderUrl>
+  </Tender>
+  <Tender>
+    <TenderRefNo>CPPP-PRINT-003</TenderRefNo>
+    <TenderTitle>Supply of toner cartridge and ink supply kits</TenderTitle>
+    <OrganisationName>Office of the Controller of Publications</OrganisationName>
+    <State>Karnataka</State>
+    <BidEndDate>20 February 2027 12:30</BidEndDate>
+    <TenderValue>750000</TenderValue>
+    <TenderUrl>https://eprocure.gov.in/eprocure/app?component=%24DirectLink&amp;page=FrontEndViewTender&amp;service=direct&amp;sp=CPPP-PRINT-003</TenderUrl>
+  </Tender>
+</Tenders>
