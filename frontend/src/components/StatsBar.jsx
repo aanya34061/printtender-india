@@ -1,27 +1,45 @@
-import { Database, Landmark, Timer } from "lucide-react";
-
+import { Activity, Database, Globe } from "lucide-react";
+import { formatDistanceToNowStrict, parseISO } from "date-fns";
 import { useStats } from "../hooks/useStats.js";
 
 export default function StatsBar() {
-  const { data } = useStats();
+  const { data, isLoading } = useStats();
+
+  const lastFetch = data?.last_fetch
+    ? formatDistanceToNowStrict(parseISO(data.last_fetch), { addSuffix: true })
+    : null;
+
+  if (isLoading) {
+    return (
+      <div className="flex flex-wrap gap-4 text-sm text-navy/60">
+        {[1, 2, 3].map((i) => (
+          <div key={i} className="h-5 w-32 animate-pulse rounded bg-navy/10" />
+        ))}
+      </div>
+    );
+  }
 
   return (
-    <div className="grid gap-3 sm:grid-cols-3">
-      <Stat icon={<Database />} label="Total tenders" value={data?.total_tenders ?? 0} />
-      <Stat icon={<Timer />} label="Active tenders" value={data?.active_tenders ?? 0} />
-      <Stat icon={<Landmark />} label="Sources" value={Object.keys(data?.sources ?? {}).length} />
+    <div className="flex flex-wrap items-center gap-x-6 gap-y-2 rounded-lg border border-navy/10 bg-white px-4 py-3 text-sm shadow-sm">
+      <Stat icon={<Database className="h-4 w-4" />} value={data?.total_active ?? 0} label="Active Tenders" />
+      <span className="hidden text-navy/20 sm:block">|</span>
+      <Stat icon={<Globe className="h-4 w-4" />} value={data?.portals_count ?? 0} label="Portals" />
+      <span className="hidden text-navy/20 sm:block">|</span>
+      <Stat
+        icon={<Activity className="h-4 w-4" />}
+        value={lastFetch ? `Updated ${lastFetch}` : "Fetching…"}
+        label={null}
+      />
     </div>
   );
 }
 
-function Stat({ icon, label, value }) {
+function Stat({ icon, value, label }) {
   return (
-    <div className="flex items-center gap-3 rounded border border-neutral-200 bg-white px-4 py-3">
-      <span className="text-sky-700 [&>svg]:h-5 [&>svg]:w-5">{icon}</span>
-      <div>
-        <p className="text-xs text-neutral-500">{label}</p>
-        <p className="text-lg font-semibold">{value}</p>
-      </div>
+    <div className="flex items-center gap-1.5 font-medium text-navy">
+      <span className="text-teal">{icon}</span>
+      <span>{value}</span>
+      {label && <span className="font-normal text-navy/50">{label}</span>}
     </div>
   );
 }
