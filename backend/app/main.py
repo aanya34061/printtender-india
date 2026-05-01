@@ -1,10 +1,11 @@
-from contextlib import asynccontextmanager
 from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.alerts import router as alerts_router
+from app.api.fetch import router as fetch_router
 from app.api.stats import router as stats_router
 from app.api.tenders import router as tenders_router
 from app.config import get_settings
@@ -15,16 +16,14 @@ settings = get_settings()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    # startup
     yield
-    # shutdown
     await engine.dispose()
 
 
 app = FastAPI(
     title="PrintTender India API",
     description="Government tender aggregator for the Indian printing press industry.",
-    version="0.1.0",
+    version="1.0.0",
     lifespan=lifespan,
 )
 
@@ -36,9 +35,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(tenders_router, prefix="/tenders", tags=["tenders"])
-app.include_router(alerts_router, prefix="/alerts", tags=["alerts"])
-app.include_router(stats_router, prefix="/stats", tags=["stats"])
+app.include_router(tenders_router, prefix="/api/tenders", tags=["tenders"])
+app.include_router(alerts_router, prefix="/api/alerts", tags=["alerts"])
+app.include_router(stats_router, prefix="/api/stats", tags=["stats"])
+app.include_router(fetch_router, prefix="/api/fetch", tags=["fetch"])
 
 
 @app.get("/health")

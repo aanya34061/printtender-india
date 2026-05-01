@@ -3,8 +3,99 @@
 @tailwind utilities;
 
 @layer base {
-  body {
-    background-color: #F5F0E8;
-    color: #1A2C52;
+  html { font-family: "Inter", sans-serif; }
+  body { background-color: #0f1117; color: #e2e8f0; }
+  * { box-sizing: border-box; }
+}
+
+@layer components {
+  .card {
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 12px;
+    backdrop-filter: blur(12px);
+    transition: transform 150ms ease, box-shadow 150ms ease;
   }
+  .card:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 8px 32px rgba(249, 115, 22, 0.12);
+  }
+  .btn-accent {
+    background: #f97316;
+    color: white;
+    font-weight: 600;
+    border-radius: 8px;
+    padding: 8px 16px;
+    transition: background 150ms, transform 100ms;
+  }
+  .btn-accent:hover { background: #ea6c0a; transform: translateY(-1px); }
+  .btn-outline {
+    border: 1px solid rgba(255,255,255,0.15);
+    color: #e2e8f0;
+    border-radius: 8px;
+    padding: 8px 16px;
+    transition: border-color 150ms, background 150ms;
+  }
+  .btn-outline:hover { border-color: #f97316; background: rgba(249,115,22,0.08); }
+  .input-field {
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 10px;
+    color: #e2e8f0;
+    outline: none;
+    transition: border-color 200ms, box-shadow 200ms;
+  }
+  .input-field::placeholder { color: #64748b; }
+  .input-field:focus {
+    border-color: #f97316;
+    box-shadow: 0 0 0 3px rgba(249,115,22,0.2);
+  }
+  .select-field {
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 8px;
+    color: #e2e8f0;
+    outline: none;
+    appearance: none;
+    -webkit-appearance: none;
+    cursor: pointer;
+  }
+  .select-field:focus { border-color: #f97316; }
+}
+
+@layer utilities {
+  .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
+  .scrollbar-hide::-webkit-scrollbar { display: none; }
+  .text-gradient {
+    background: linear-gradient(135deg, #f97316, #fbbf24);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+}
+
+/* Shimmer skeleton animation */
+@keyframes shimmer {
+  0% { background-position: -800px 0; }
+  100% { background-position: 800px 0; }
+}
+.shimmer {
+  animation: shimmer 1.8s infinite linear;
+  background: linear-gradient(to right, #1e2235 4%, #2a3050 25%, #1e2235 36%);
+  background-size: 800px 100%;
+}
+
+/* FAB pulse ring */
+@keyframes pulse-ring {
+  0% { transform: scale(1); opacity: 0.6; }
+  100% { transform: scale(2); opacity: 0; }
+}
+.fab-pulse::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: #f97316;
+  animation: pulse-ring 2.5s ease-out infinite;
+  z-index: -1;
 }

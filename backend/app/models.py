@@ -78,6 +78,8 @@ class AlertSubscription(Base):
     )
     frequency: Mapped[str] = mapped_column(String(10), default="daily", server_default=text("'daily'"), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("TRUE"), nullable=True)
+    is_confirmed: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("FALSE"), nullable=True)
+    confirm_token: Mapped[str | None] = mapped_column(Text, unique=True, nullable=True)
     last_sent: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=True)
 

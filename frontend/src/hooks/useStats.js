@@ -7,7 +7,7 @@ export function useStats() {
   return useQuery({
     queryKey: ["stats"],
     queryFn: async () => {
-      const { data } = await axios.get(`${BASE}/stats`);
+      const { data } = await axios.get(`${BASE}/api/stats`);
       return data;
     },
     staleTime: 1000 * 60 * 5,

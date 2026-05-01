@@ -1,67 +1,108 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import distinct, func, select
+from sqlalchemy import case, distinct, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models import AlertSubscription, FetchLog, Tender
-from app.schemas import StatsResponse
 
 router = APIRouter()
 
 
-@router.get("", response_model=StatsResponse)
-async def get_stats(session: AsyncSession = Depends(get_db)) -> StatsResponse:
-    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+@router.get("")
+async def get_stats(session: AsyncSession = Depends(get_db)) -> dict:
+    now = datetime.now(timezone.utc)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    yesterday_start = today_start - timedelta(days=1)
+    seven_days = now + timedelta(days=7)
 
     total_active = (
-        await session.scalar(select(func.count()).select_from(Tender).where(Tender.is_active.is_(True))) or 0
-    )
-    tenders_today = (
-        await session.scalar(select(func.count()).select_from(Tender).where(Tender.fetched_at >= today_start)) or 0
-    )
-    portals_count = (
         await session.scalar(
-            select(func.count(distinct(Tender.portal_source))).where(Tender.portal_source.is_not(None))
-        )
-        or 0
+            select(func.count()).select_from(Tender).where(Tender.is_active.is_(True))
+        ) or 0
+    )
+    total_today = (
+        await session.scalar(
+            select(func.count()).select_from(Tender).where(Tender.fetched_at >= today_start)
+        ) or 0
+    )
+    expiring_7_days = (
+        await session.scalar(
+            select(func.count())
+            .select_from(Tender)
+            .where(Tender.is_active.is_(True))
+            .where(Tender.bid_end_date > now)
+            .where(Tender.bid_end_date <= seven_days)
+        ) or 0
+    )
+    new_since_yesterday = (
+        await session.scalar(
+            select(func.count())
+            .select_from(Tender)
+            .where(Tender.fetched_at >= yesterday_start)
+            .where(Tender.fetched_at < today_start)
+        ) or 0
+    )
+    states_covered = (
+        await session.scalar(
+            select(func.count(distinct(Tender.state)))
+            .where(Tender.is_active.is_(True))
+            .where(Tender.state.is_not(None))
+        ) or 0
     )
     last_fetch = await session.scalar(select(func.max(FetchLog.fetched_at)))
+
+    # by_portal bucketing
+    rows = await session.execute(
+        select(Tender.portal_source, func.count().label("cnt"))
+        .where(Tender.is_active.is_(True))
+        .group_by(Tender.portal_source)
+    )
+    by_portal: dict[str, int] = {"CPPP": 0, "GeM": 0, "State": 0, "Other": 0}
+    for source, cnt in rows:
+        if source == "CPPP":
+            by_portal["CPPP"] += cnt
+        elif source == "GeM":
+            by_portal["GeM"] += cnt
+        elif source and source.startswith("State-"):
+            by_portal["State"] += cnt
+        else:
+            by_portal["Other"] += cnt
 
     alert_rows = await session.scalars(
         select(AlertSubscription.keywords).where(AlertSubscription.is_active.is_(True))
     )
     keywords_tracked = len({kw for kws in alert_rows for kw in (kws or [])})
 
-    return StatsResponse(
-        total_active=total_active,
-        tenders_today=tenders_today,
-        portals_count=portals_count,
-        last_fetch=last_fetch,
-        keywords_tracked=keywords_tracked,
-    )
+    return {
+        "total_active": total_active,
+        "total_today": total_today,
+        "expiring_7_days": expiring_7_days,
+        "new_since_yesterday": new_since_yesterday,
+        "states_covered": states_covered,
+        "by_portal": by_portal,
+        "last_fetch": last_fetch,
+        "portals_count": sum(1 for v in by_portal.values() if v > 0),
+        "keywords_tracked": keywords_tracked,
+    }
 
 
 @router.get("/portals/status")
 async def portal_status(session: AsyncSession = Depends(get_db)) -> list[dict]:
-    # latest fetch log per portal
     subq = (
         select(FetchLog.portal, func.max(FetchLog.fetched_at).label("max_fetched"))
         .group_by(FetchLog.portal)
         .subquery()
     )
     rows = await session.execute(
-        select(FetchLog)
-        .join(subq, (FetchLog.portal == subq.c.portal) & (FetchLog.fetched_at == subq.c.max_fetched))
+        select(FetchLog).join(
+            subq,
+            (FetchLog.portal == subq.c.portal) & (FetchLog.fetched_at == subq.c.max_fetched),
+        )
     )
     logs = rows.scalars().all()
     return [
-        {
-            "portal": log.portal,
-            "last_fetch": log.fetched_at,
-            "status": log.status,
-            "tenders_found": log.tenders_found,
-        }
+        {"portal": log.portal, "last_fetch": log.fetched_at, "status": log.status, "tenders_found": log.tenders_found}
         for log in logs
     ]

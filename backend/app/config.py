@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     FETCH_INTERVAL_HOURS: int = 6
     MAX_TENDERS_PER_KEYWORD: int = 100
     REQUEST_DELAY_SECONDS: float = 3
+    FRONTEND_URL: str = "http://localhost:5173"
 
     @property
     def database_url(self) -> str:
@@ -44,7 +45,7 @@ class Settings(BaseSettings):
 
     @property
     def cors_origins(self) -> list[str]:
-        return ["http://localhost:5173"]
+        return ["*"]
 
 
 @lru_cache

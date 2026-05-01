@@ -1,19 +1,24 @@
 import { create } from "zustand";
 
 export const useFilterStore = create((set) => ({
-  query: "printing",
+  q: "printing",
   state: null,
   portal: null,
-  category: null,
-  days: 30,
+  deadline_within_days: 30,
+  min_value: null,
+  max_value: null,
+  sort: "deadline_asc",
   page: 1,
+  limit: 20,
 
-  setQuery: (query) => set({ query, page: 1 }),
+  setQ: (q) => set({ q, page: 1 }),
   setState: (state) => set({ state, page: 1 }),
   setPortal: (portal) => set({ portal, page: 1 }),
-  setCategory: (category) => set({ category, page: 1 }),
-  setDays: (days) => set({ days, page: 1 }),
+  setDeadlineDays: (deadline_within_days) => set({ deadline_within_days, page: 1 }),
+  setValueRange: (min_value, max_value) => set({ min_value, max_value, page: 1 }),
+  setSort: (sort) => set({ sort, page: 1 }),
   setPage: (page) => set({ page }),
   resetFilters: () =>
-    set({ query: "printing", state: null, portal: null, category: null, days: 30, page: 1 }),
+    set({ q: "printing", state: null, portal: null, deadline_within_days: 30,
+          min_value: null, max_value: null, sort: "deadline_asc", page: 1 }),
 }));
