@@ -4,11 +4,21 @@ from app.config import get_settings
 
 settings = get_settings()
 
-celery_app = Celery("printtender_india", broker=settings.redis_url, backend=settings.redis_url)
-celery_app.conf.timezone = "Asia/Kolkata"
-celery_app.conf.beat_schedule = {
-    "fetch-tenders": {
-        "task": "app.tasks.fetch_job.fetch_all_sources",
-        "schedule": settings.fetch_interval_hours * 60 * 60,
-    }
-}
+celery_app = Celery(
+    "printtender_india",
+    broker=settings.REDIS_URL,
+    backend=settings.REDIS_URL,
+)
+celery_app.conf.update(
+    task_serializer="json",
+    accept_content=["json"],
+    result_serializer="json",
+    timezone="Asia/Kolkata",
+    enable_utc=True,
+    beat_schedule={
+        "fetch-all-tenders": {
+            "task": "app.tasks.fetch_job.fetch_all_tenders",
+            "schedule": settings.FETCH_INTERVAL_HOURS * 3600,
+        }
+    },
+)
