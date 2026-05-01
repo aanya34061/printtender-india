@@ -1,0 +1,53 @@
+services:
+  # --- FastAPI web service ---
+  - type: web
+    name: printtender-api
+    runtime: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt && playwright install chromium --with-deps
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - fromGroup: printtender-env
+
+  # --- Celery worker ---
+  - type: worker
+    name: printtender-worker
+    runtime: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt && playwright install chromium --with-deps
+    startCommand: celery -A app.tasks.celery_app.celery_app worker --loglevel=info --concurrency=2
+    plan: free
+    envVars:
+      - fromGroup: printtender-env
+
+  # --- Celery beat scheduler (cron every 6 h) ---
+  - type: cron
+    name: printtender-scheduler
+    runtime: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: celery -A app.tasks.celery_app.celery_app beat --loglevel=info
+    schedule: "0 */6 * * *"
+    plan: free
+    envVars:
+      - fromGroup: printtender-env
+
+envVarGroups:
+  - name: printtender-env
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: APP_ENV
+        value: production
+      - key: FETCH_INTERVAL_HOURS
+        value: "6"
+      - key: MAX_TENDERS_PER_KEYWORD
+        value: "100"
+      - key: REQUEST_DELAY_SECONDS
+        value: "3"
