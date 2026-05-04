@@ -96,6 +96,10 @@ def is_generic_link(url: str | None) -> bool:
             return True
         if parsed.netloc.endswith("bidplus.gem.gov.in") and path == "all-bids":
             return True
+        if _is_aggregator_listing(parsed.netloc, path):
+            return True
+        if _is_aggregator_detail(parsed.netloc, path):
+            return False
         if _query_contains_specific_ref(query):
             return False
         if _path_has_slug_identifier(path):
@@ -138,6 +142,13 @@ def build_deep_link(portal: str, ref_number: str, tender_id: str | None = None) 
         if ref:
             return (
                 f"https://www.google.com/search?q={quote_plus(ref)}+site:bidassist.com"
+            )
+
+    if portal_name in {"TenderTiger", "Tender Tiger"}:
+        if ref:
+            return (
+                "https://global.tendertiger.com/quicksearch.aspx"
+                f"?SerText={quote_plus(ref)}&st=qs"
             )
 
     query = f"{ref} tender".strip() or "government tender"
@@ -211,6 +222,32 @@ def _is_search_fallback(url: str | None) -> bool:
 def _is_nic_host(netloc: str) -> bool:
     host = netloc.casefold()
     return any(host == nic_host or host.endswith(f".{nic_host}") for nic_host in NIC_PORTAL_HOSTS)
+
+
+def _is_aggregator_listing(netloc: str, path: str) -> bool:
+    host = netloc.casefold()
+    lowered_path = path.casefold().strip("/")
+    if host.endswith("bidassist.com"):
+        return (
+            lowered_path == "all-tenders/active"
+            or lowered_path.endswith("-tender/active")
+            or lowered_path.endswith("-tenders/active")
+        )
+    if host.endswith("tendertiger.com"):
+        return lowered_path in {"tenderai/tenderailist", "quicksearch.aspx", "search"}
+    return False
+
+
+def _is_aggregator_detail(netloc: str, path: str) -> bool:
+    host = netloc.casefold()
+    lowered_path = path.casefold().strip("/")
+    if host.endswith("tendertiger.com"):
+        return "detail" in lowered_path and len(lowered_path) > len("detail")
+    if host.endswith("bidassist.com"):
+        return "/detail-" in f"/{lowered_path}"
+    if host.endswith("tenderdekho.com"):
+        return lowered_path.startswith(("tender/", "tender-detail/"))
+    return False
 
 
 def _last_path_part(value: str) -> str:

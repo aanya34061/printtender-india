@@ -7,6 +7,12 @@ from sqlalchemy.dialects.postgresql import insert
 from app.config import get_settings
 from app.database import async_session
 from app.email_service import send_tender_alert_email
+from app.fetchers.aggregators import (
+    scrape_bidassist,
+    scrape_eprocure_search,
+    scrape_tenderdekho,
+    scrape_tendertiger,
+)
 from app.fetchers.cppp import CPPPFetcher, scrape_cppp_mp
 from app.fetchers.gem import GeMFetcher
 from app.fetchers.mp_portals import (
@@ -144,6 +150,26 @@ async def run_fetch_cycle() -> int:
             await _log_fetch("GeM MP", len(gem_mp_raw), "ok")
         except Exception as exc:
             await _log_fetch("GeM MP", 0, "error", str(exc))
+
+    aggregator_scrapers = [
+        ("TenderTiger", scrape_tendertiger),
+        ("TenderDekho", scrape_tenderdekho),
+        ("BidAssist", scrape_bidassist),
+        ("CPPP Search", scrape_eprocure_search),
+    ]
+    aggregator_counts = {label: 0 for label, _ in aggregator_scrapers}
+    for keyword in gem.keywords:
+        for label, scraper in aggregator_scrapers:
+            portal_label, raw, err = _fetch_by_source(
+                label, lambda s=scraper, k=keyword: s(k)
+            )
+            all_raw.extend(raw)
+            aggregator_counts[label] += len(raw)
+            await _log_fetch(
+                portal_label, len(raw), "ok" if err is None else "error", err
+            )
+    for label, found in aggregator_counts.items():
+        print(f"fetch_cycle_source portal={label} found={found}")
 
     tenders = deduplicate_tenders([normalise_tender(r) for r in all_raw])
     new_ids = await _upsert_tenders(tenders)
