@@ -4,16 +4,19 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=".env", env_file_encoding="utf-8", extra="ignore"
+    )
 
     DATABASE_URL: str
     REDIS_URL: str
-    RESEND_API_KEY: str
+    RESEND_API_KEY: str = ""
     APP_ENV: str = "development"
     FETCH_INTERVAL_HOURS: int = 6
     MAX_TENDERS_PER_KEYWORD: int = 100
     REQUEST_DELAY_SECONDS: float = 3
     FRONTEND_URL: str = "http://localhost:5173"
+    BACKEND_URL: str = "http://localhost:8000"
 
     @property
     def database_url(self) -> str:

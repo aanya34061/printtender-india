@@ -32,13 +32,21 @@ CREATE INDEX idx_tenders_tender_id ON tenders(tender_id);
 CREATE TABLE alert_subscriptions (
   id SERIAL PRIMARY KEY,
   email TEXT NOT NULL,
+  keyword TEXT NOT NULL DEFAULT 'printing',
   whatsapp TEXT,
   keywords TEXT[] DEFAULT ARRAY['printing'],
   states TEXT[] DEFAULT ARRAY[]::TEXT[],
   frequency VARCHAR(10) DEFAULT 'daily',
   is_active BOOLEAN DEFAULT TRUE,
+  confirmed BOOLEAN DEFAULT FALSE,
+  is_confirmed BOOLEAN DEFAULT FALSE,
+  token TEXT UNIQUE,
+  confirm_token TEXT UNIQUE,
+  confirmed_at TIMESTAMPTZ,
+  last_alerted_at TIMESTAMPTZ,
   last_sent TIMESTAMPTZ,
-  created_at TIMESTAMPTZ DEFAULT NOW()
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  CONSTRAINT uq_alert_email_keyword UNIQUE (email, keyword)
 );
 
 CREATE TABLE fetch_logs (

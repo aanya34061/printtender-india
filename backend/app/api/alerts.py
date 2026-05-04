@@ -1,109 +1,138 @@
-import secrets
+from __future__ import annotations
 
-from fastapi import APIRouter, Body, Depends, HTTPException
+import secrets
+from datetime import datetime, timezone
+
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, EmailStr, field_validator
-from sqlalchemy import select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.alerts.email_sender import send_confirmation_email, send_welcome_email
+from app.alerts.email_sender import send_welcome_email
 from app.config import get_settings
 from app.database import get_db
+from app.email_service import (
+    send_confirmation_email,
+    send_unsubscribe_confirmation_email,
+)
 from app.models import AlertSubscription
 from app.schemas import AlertSubscriptionCreate, AlertSubscriptionRead
 
 router = APIRouter()
 
 
-# ── New compact schema used by the frontend ────────────────────────────────
 class _AlertCreate(BaseModel):
     email: EmailStr
     keyword: str = "printing"
     frequency: str = "daily"
 
+    @field_validator("keyword")
+    @classmethod
+    def valid_keyword(cls, value: str) -> str:
+        keyword = " ".join(value.split())
+        if not keyword:
+            raise ValueError("keyword is required")
+        return keyword
+
     @field_validator("frequency")
     @classmethod
-    def valid_frequency(cls, v: str) -> str:
-        if v not in ("daily", "instant", "weekly"):
-            raise ValueError("frequency must be 'daily', 'instant', or 'weekly'")
-        return v
+    def valid_frequency(cls, value: str) -> str:
+        if value not in ("daily", "instant"):
+            raise ValueError("frequency must be 'daily' or 'instant'")
+        return value
 
 
-# ── Old verbose schema (kept for backwards-compat) ─────────────────────────
 class _SubscribePayload(AlertSubscriptionCreate):
     email: EmailStr  # type: ignore[assignment]
 
     @field_validator("keywords")
     @classmethod
-    def at_least_one(cls, v: list[str]) -> list[str]:
-        if len(v) < 1:
+    def at_least_one(cls, value: list[str]) -> list[str]:
+        if len(value) < 1:
             raise ValueError("At least one keyword is required")
-        return v
+        return value
 
     @field_validator("frequency")
     @classmethod
-    def valid_freq(cls, v: str) -> str:
-        if v not in ("daily", "weekly", "instant"):
+    def valid_freq(cls, value: str) -> str:
+        if value not in ("daily", "weekly", "instant"):
             raise ValueError("frequency must be 'daily', 'weekly', or 'instant'")
-        return v
+        return value
 
 
 class _DeleteBody(BaseModel):
-    email: EmailStr
+    email: EmailStr | None = None
 
 
 def _make_token() -> str:
     return secrets.token_urlsafe(32)
 
 
-# ── POST /api/alerts  (new, used by frontend) ─────────────────────────────
 @router.post("", status_code=201)
 async def create_alert(
     payload: _AlertCreate,
+    background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_db),
-) -> dict:
+) -> dict[str, str]:
     token = _make_token()
-    alert = AlertSubscription(
-        email=str(payload.email),
-        keywords=[payload.keyword],
-        states=[],
-        frequency=payload.frequency,
-        confirm_token=token,
-        is_confirmed=False,
+    email = str(payload.email)
+    result = await session.execute(
+        select(AlertSubscription).where(
+            AlertSubscription.email == email,
+            AlertSubscription.keyword == payload.keyword,
+        )
     )
-    session.add(alert)
+    alert = result.scalar_one_or_none()
+    if alert is None:
+        alert = AlertSubscription(
+            email=email,
+            keyword=payload.keyword,
+            keywords=[payload.keyword],
+            states=[],
+            frequency=payload.frequency,
+            token=token,
+            confirm_token=token,
+            confirmed=False,
+            is_confirmed=False,
+            is_active=True,
+        )
+        session.add(alert)
+    else:
+        alert.frequency = payload.frequency
+        alert.keywords = [payload.keyword]
+        alert.token = token
+        alert.confirm_token = token
+        alert.confirmed = False
+        alert.is_confirmed = False
+        alert.confirmed_at = None
+        alert.is_active = True
     await session.commit()
-    await session.refresh(alert)
-    settings = get_settings()
-    confirm_url = f"{settings.FRONTEND_URL.rstrip('/')}/confirm?token={token}"
-    try:
-        send_confirmation_email(str(payload.email), payload.keyword, confirm_url)
-    except Exception:
-        pass
-    return {
-        "id": alert.id,
-        "email": alert.email,
-        "keyword": payload.keyword,
-        "frequency": alert.frequency,
-        "is_confirmed": alert.is_confirmed,
-        "message": "Subscription created — check your email to confirm.",
-    }
+
+    confirm_url = f"{get_settings().BACKEND_URL.rstrip('/')}/api/alerts/confirm/{token}"
+    background_tasks.add_task(
+        send_confirmation_email, email, payload.keyword, confirm_url
+    )
+    return {"status": "pending", "message": "Check your email to confirm the alert."}
 
 
-# ── POST /api/alerts/subscribe  (legacy, kept for tests) ──────────────────
 @router.post("/subscribe", response_model=AlertSubscriptionRead, status_code=201)
 async def subscribe(
     payload: _SubscribePayload,
     session: AsyncSession = Depends(get_db),
 ) -> AlertSubscriptionRead:
     token = _make_token()
+    primary_keyword = payload.keywords[0]
     alert = AlertSubscription(
         email=str(payload.email),
+        keyword=primary_keyword,
         whatsapp=payload.whatsapp,
         keywords=payload.keywords,
         states=payload.states,
         frequency=payload.frequency,
+        token=token,
         confirm_token=token,
+        confirmed=False,
         is_confirmed=False,
     )
     session.add(alert)
@@ -116,33 +145,63 @@ async def subscribe(
     return AlertSubscriptionRead.model_validate(alert)
 
 
-# ── GET /api/alerts/confirm/{token} ──────────────────────────────────────
 @router.get("/confirm/{token}")
-async def confirm_alert(token: str, session: AsyncSession = Depends(get_db)) -> RedirectResponse:
+async def confirm_alert(
+    token: str, session: AsyncSession = Depends(get_db)
+) -> RedirectResponse:
     result = await session.execute(
-        select(AlertSubscription).where(AlertSubscription.confirm_token == token)
+        select(AlertSubscription).where(
+            or_(
+                AlertSubscription.token == token,
+                AlertSubscription.confirm_token == token,
+            )
+        )
     )
     sub = result.scalar_one_or_none()
     if sub is None:
         raise HTTPException(status_code=404, detail="Confirmation token not found")
+    now = datetime.now(timezone.utc)
+    sub.confirmed = True
     sub.is_confirmed = True
+    sub.confirmed_at = now
+    sub.is_active = True
     await session.commit()
-    frontend_url = get_settings().FRONTEND_URL
+    frontend_url = get_settings().FRONTEND_URL.rstrip("/")
     return RedirectResponse(url=f"{frontend_url}?confirmed=true", status_code=303)
 
 
-# ── DELETE /api/alerts/{id} ───────────────────────────────────────────────
-@router.delete("/{alert_id}", status_code=200)
+@router.delete("/{token}", status_code=200)
 async def unsubscribe(
-    alert_id: int,
-    body: _DeleteBody = Body(...),
+    token: str,
+    background_tasks: BackgroundTasks,
+    body: _DeleteBody | None = Body(default=None),
     session: AsyncSession = Depends(get_db),
 ) -> dict[str, str]:
-    result = await session.get(AlertSubscription, alert_id)
-    if result is None:
+    result = await session.execute(
+        select(AlertSubscription).where(
+            or_(
+                AlertSubscription.token == token,
+                AlertSubscription.confirm_token == token,
+            )
+        )
+    )
+    sub = result.scalar_one_or_none()
+
+    if sub is None and token.isdigit() and body and body.email:
+        sub = await session.get(AlertSubscription, int(token))
+        if sub is not None and sub.email != str(body.email):
+            raise HTTPException(
+                status_code=403, detail="Email does not match this subscription"
+            )
+
+    if sub is None:
         raise HTTPException(status_code=404, detail="Subscription not found")
-    if result.email != str(body.email):
-        raise HTTPException(status_code=403, detail="Email does not match this subscription")
-    result.is_active = False
+
+    email = sub.email
+    keyword = sub.keyword
+    await session.execute(
+        delete(AlertSubscription).where(AlertSubscription.id == sub.id)
+    )
     await session.commit()
+    background_tasks.add_task(send_unsubscribe_confirmation_email, email, keyword)
     return {"detail": "Unsubscribed successfully"}

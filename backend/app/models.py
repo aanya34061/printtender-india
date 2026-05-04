@@ -11,6 +11,7 @@ from sqlalchemy import (
     SmallInteger,
     String,
     Text,
+    UniqueConstraint,
     func,
     text,
 )
@@ -90,9 +91,15 @@ class Tender(Base):
 
 class AlertSubscription(Base):
     __tablename__ = "alert_subscriptions"
+    __table_args__ = (
+        UniqueConstraint("email", "keyword", name="uq_alert_email_keyword"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     email: Mapped[str] = mapped_column(Text, nullable=False)
+    keyword: Mapped[str] = mapped_column(
+        Text, default="printing", server_default=text("'printing'"), nullable=False
+    )
     whatsapp: Mapped[str | None] = mapped_column(Text)
     keywords: Mapped[list[str] | None] = mapped_column(
         ARRAY(Text),
@@ -112,10 +119,16 @@ class AlertSubscription(Base):
     is_active: Mapped[bool] = mapped_column(
         Boolean, default=True, server_default=text("TRUE"), nullable=True
     )
+    confirmed: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("FALSE"), nullable=True
+    )
     is_confirmed: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default=text("FALSE"), nullable=True
     )
+    token: Mapped[str | None] = mapped_column(Text, unique=True, nullable=True)
     confirm_token: Mapped[str | None] = mapped_column(Text, unique=True, nullable=True)
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_alerted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_sent: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=True

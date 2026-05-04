@@ -40,6 +40,18 @@ async def run_startup_migrations() -> None:
         "ALTER TABLE IF EXISTS tenders ADD COLUMN IF NOT EXISTS link_type VARCHAR(10) DEFAULT 'search'",
         "ALTER TABLE IF EXISTS tenders ADD COLUMN IF NOT EXISTS link_verified BOOLEAN DEFAULT FALSE",
         "CREATE INDEX IF NOT EXISTS idx_tenders_tender_id ON tenders(tender_id)",
+        "ALTER TABLE IF EXISTS alert_subscriptions ADD COLUMN IF NOT EXISTS keyword TEXT DEFAULT 'printing'",
+        "UPDATE alert_subscriptions SET keyword = COALESCE(keyword, keywords[1], 'printing') WHERE keyword IS NULL",
+        "ALTER TABLE IF EXISTS alert_subscriptions ALTER COLUMN keyword SET NOT NULL",
+        "ALTER TABLE IF EXISTS alert_subscriptions ADD COLUMN IF NOT EXISTS confirmed BOOLEAN DEFAULT FALSE",
+        "ALTER TABLE IF EXISTS alert_subscriptions ADD COLUMN IF NOT EXISTS token TEXT",
+        "ALTER TABLE IF EXISTS alert_subscriptions ADD COLUMN IF NOT EXISTS confirmed_at TIMESTAMPTZ",
+        "ALTER TABLE IF EXISTS alert_subscriptions ADD COLUMN IF NOT EXISTS last_alerted_at TIMESTAMPTZ",
+        "ALTER TABLE IF EXISTS alert_subscriptions ADD COLUMN IF NOT EXISTS is_confirmed BOOLEAN DEFAULT FALSE",
+        "ALTER TABLE IF EXISTS alert_subscriptions ADD COLUMN IF NOT EXISTS confirm_token TEXT",
+        "ALTER TABLE IF EXISTS alert_subscriptions ADD COLUMN IF NOT EXISTS last_sent TIMESTAMPTZ",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_alert_email_keyword ON alert_subscriptions(email, keyword)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_alert_subscriptions_token ON alert_subscriptions(token) WHERE token IS NOT NULL",
     ]
     async with engine.begin() as conn:
         for statement in statements:

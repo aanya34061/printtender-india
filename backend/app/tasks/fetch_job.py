@@ -1,20 +1,31 @@
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
+from sqlalchemy import or_, select
 from sqlalchemy.dialects.postgresql import insert
 
+from app.config import get_settings
 from app.database import async_session
+from app.email_service import send_tender_alert_email
 from app.fetchers.cppp import CPPPFetcher
 from app.fetchers.gem import GeMFetcher
 from app.fetchers.state import StateFetcher
-from app.models import FetchLog, Tender
+from app.models import AlertSubscription, FetchLog, Tender
 from app.processing.deduplicator import deduplicate_tenders
 from app.processing.normaliser import normalise_tender
 from app.tasks.celery_app import celery_app
 
 
-async def _upsert_tenders(tenders: list) -> None:
+async def _upsert_tenders(tenders: list) -> list[int]:
+    new_ids: list[int] = []
     async with async_session() as session:
+        ref_numbers = [tender.ref_number for tender in tenders]
+        existing_refs: set[str] = set()
+        if ref_numbers:
+            result = await session.scalars(
+                select(Tender.ref_number).where(Tender.ref_number.in_(ref_numbers))
+            )
+            existing_refs = set(result)
         for tender in tenders:
             stmt = (
                 insert(Tender)
@@ -33,9 +44,14 @@ async def _upsert_tenders(tenders: list) -> None:
                         "fetched_at": datetime.now(timezone.utc),
                     },
                 )
+                .returning(Tender.id)
             )
-            await session.execute(stmt)
+            result = await session.execute(stmt)
+            saved_id = result.scalar_one_or_none()
+            if saved_id is not None and tender.ref_number not in existing_refs:
+                new_ids.append(saved_id)
         await session.commit()
+    return new_ids
 
 
 async def _log_fetch(
@@ -97,8 +113,78 @@ async def run_fetch_cycle() -> int:
     )
 
     tenders = deduplicate_tenders([normalise_tender(r) for r in all_raw])
-    await _upsert_tenders(tenders)
+    new_ids = await _upsert_tenders(tenders)
+    await send_matching_alerts(new_ids)
     return len(tenders)
+
+
+async def send_matching_alerts(new_tender_ids: list[int]) -> int:
+    if not new_tender_ids:
+        return 0
+
+    now = datetime.now(timezone.utc)
+    async with async_session() as session:
+        tender_rows = await session.scalars(
+            select(Tender).where(Tender.id.in_(new_tender_ids))
+        )
+        tenders = list(tender_rows)
+        if not tenders:
+            return 0
+
+        subscriber_rows = await session.scalars(
+            select(AlertSubscription).where(
+                AlertSubscription.is_active.is_(True),
+                or_(
+                    AlertSubscription.confirmed.is_(True),
+                    AlertSubscription.is_confirmed.is_(True),
+                ),
+            )
+        )
+        subscribers = list(subscriber_rows)
+        sent_count = 0
+        for subscriber in subscribers:
+            keyword = (
+                subscriber.keyword
+                or (subscriber.keywords[0] if subscriber.keywords else "")
+            ).strip()
+            if not keyword:
+                continue
+            matches = [
+                tender for tender in tenders if _tender_matches_keyword(tender, keyword)
+            ]
+            if not matches:
+                continue
+            if subscriber.frequency == "daily":
+                last_alerted = subscriber.last_alerted_at or subscriber.last_sent
+                if last_alerted and last_alerted > now - timedelta(hours=23):
+                    continue
+
+            unsubscribe_token = subscriber.token or subscriber.confirm_token or ""
+            unsubscribe_url = (
+                f"{get_settings().BACKEND_URL.rstrip('/')}/api/alerts/{unsubscribe_token}"
+                if unsubscribe_token
+                else None
+            )
+            if send_tender_alert_email(
+                subscriber.email,
+                keyword,
+                matches,
+                unsubscribe_url=unsubscribe_url,
+            ):
+                subscriber.last_alerted_at = now
+                subscriber.last_sent = now
+                sent_count += 1
+
+        if sent_count:
+            await session.commit()
+        return sent_count
+
+
+def _tender_matches_keyword(tender: Tender, keyword: str) -> bool:
+    needle = keyword.casefold()
+    title = (tender.title or "").casefold()
+    keywords = " ".join(tender.keywords or []).casefold()
+    return needle in title or needle in keywords
 
 
 @celery_app.task(name="app.tasks.fetch_job.fetch_all_tenders")
