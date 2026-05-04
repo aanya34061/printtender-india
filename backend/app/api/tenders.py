@@ -1,4 +1,3 @@
-from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -6,12 +5,34 @@ from sqlalchemy import Select, asc, desc, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.fetchers.deeplinks import (
+    build_deep_link,
+    classify_link,
+    is_generic_link,
+)
 from app.models import Tender
 from app.schemas import TenderRead
 
 router = APIRouter()
 
 SortOption = Literal["deadline_asc", "newest", "value_desc", "value_asc"]
+
+
+def _serialize_tender(t: Tender) -> dict:
+    """Convert ORM Tender to dict, always with a usable link and link_type."""
+    data = TenderRead.model_validate(t).model_dump()
+
+    url = (t.portal_url or "").strip()
+    tid = getattr(t, "tender_id", None)
+    verified = getattr(t, "link_verified", False)
+
+    if is_generic_link(url):
+        url = build_deep_link(t.portal_source or "", t.ref_number, tid)
+        verified = False
+
+    data["portal_url"] = url
+    data["link_type"] = classify_link(url, verified)
+    return data
 
 
 def _apply_steps(portal_source: str | None, state: str | None) -> list[str]:
@@ -58,7 +79,9 @@ def _build_base(
         .where(Tender.search_vector.op("@@")(func.plainto_tsquery("english", q)))
         .where(Tender.bid_end_date > now)
         .where(Tender.is_active.is_(True))
-        .where(Tender.bid_end_date <= now + text(f"interval '{deadline_within_days} days'"))
+        .where(
+            Tender.bid_end_date <= now + text(f"interval '{deadline_within_days} days'")
+        )
     )
     if state:
         qry = qry.where(Tender.state == state)
@@ -112,19 +135,19 @@ async def list_tenders(
     qry = _build_base(q, state, portal, deadline_within_days, min_value, max_value)
     total = await session.scalar(select(func.count()).select_from(qry.subquery())) or 0
     offset = (page - 1) * limit
-    rows = await session.scalars(
-        _apply_sort(qry, sort).limit(limit).offset(offset)
-    )
-    tenders = [TenderRead.model_validate(row) for row in rows]
+    rows = await session.scalars(_apply_sort(qry, sort).limit(limit).offset(offset))
+    tenders = [_serialize_tender(row) for row in rows]
     pages = max(1, -(-total // limit))
     return {"tenders": tenders, "total": total, "page": page, "pages": pages}
 
 
 @router.get("/{tender_id}")
-async def get_tender(tender_id: int, session: AsyncSession = Depends(get_db)) -> dict[str, Any]:
+async def get_tender(
+    tender_id: int, session: AsyncSession = Depends(get_db)
+) -> dict[str, Any]:
     tender = await session.get(Tender, tender_id)
     if tender is None:
         raise HTTPException(status_code=404, detail="Tender not found")
-    data = TenderRead.model_validate(tender).model_dump()
+    data = _serialize_tender(tender)
     data["apply_steps"] = _apply_steps(tender.portal_source, tender.state)
     return data

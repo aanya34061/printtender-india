@@ -9,13 +9,19 @@ from app.api.fetch import router as fetch_router
 from app.api.stats import router as stats_router
 from app.api.tenders import router as tenders_router
 from app.config import get_settings
-from app.database import engine
+from app.database import engine, run_startup_migrations
+from backfill_links import backfill_bad_links
 
 settings = get_settings()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    try:
+        await run_startup_migrations()
+        await backfill_bad_links()
+    except Exception as exc:
+        print(f"startup migration/backfill skipped: {exc}")
     yield
     await engine.dispose()
 

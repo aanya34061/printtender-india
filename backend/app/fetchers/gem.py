@@ -8,6 +8,7 @@ from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from playwright.async_api import async_playwright
 
 from app.fetchers.base import BaseFetcher, USER_AGENT
+from app.fetchers.deeplinks import build_deep_link
 
 
 class GeMFetcher(BaseFetcher):
@@ -70,11 +71,39 @@ class GeMFetcher(BaseFetcher):
                     continue
                 seen.add(text.casefold())
 
-                link = await self._first_link(item)
+                extracted_bid_number = self._extract_bid_number(text)
+                bid_number = extracted_bid_number or f"GeM-{keyword}-{index + 1}"
+
+                # Prefer a direct bid-details link from the card's anchor tags
+                direct_link = await self._first_bid_details_link(item)
+                if direct_link:
+                    portal_url = (
+                        direct_link
+                        if direct_link.startswith("http")
+                        else urljoin("https://bidplus.gem.gov.in", direct_link)
+                    )
+                    link_verified = True
+                    # Derive tender_id from URL: .../bid-details/BID-2025-B-12345
+                    tid_match = re.search(r"bid-details/(.+?)(?:\?|$)", portal_url)
+                    tender_id = (
+                        tid_match.group(1)
+                        if tid_match
+                        else bid_number.replace("/", "-")
+                    )
+                else:
+                    tender_id = (
+                        extracted_bid_number.replace("/", "-")
+                        if extracted_bid_number
+                        else None
+                    )
+                    portal_url = build_deep_link(
+                        self.portal_source, bid_number, tender_id
+                    )
+                    link_verified = False
+
                 tenders.append(
                     self.build_record(
-                        ref_number=self._extract_bid_number(text)
-                        or f"GeM-{keyword}-{index + 1}",
+                        ref_number=bid_number,
                         title=self._extract_field(text, ("Bid Title", "Item", "Title"))
                         or self._fallback_title(text),
                         organisation=self._extract_field(
@@ -89,8 +118,10 @@ class GeMFetcher(BaseFetcher):
                         value_raw=self._extract_field(
                             text, ("Value", "Estimated Bid Value", "Bid Value")
                         ),
-                        portal_url=urljoin(self.url, link) if link else self.url,
+                        portal_url=portal_url,
                         keyword_hit=keyword,
+                        tender_id=tender_id,
+                        link_verified=link_verified,
                     )
                 )
         return tenders
@@ -100,6 +131,15 @@ class GeMFetcher(BaseFetcher):
         if await links.count() == 0:
             return None
         return await links.first.get_attribute("href")
+
+    async def _first_bid_details_link(self, item) -> str | None:
+        """Return the direct bid-details href if present on the card, else None."""
+        # Prefer anchor with bid-details in the href
+        bid_links = item.locator("a[href*='bid-details']")
+        if await bid_links.count() > 0:
+            return await bid_links.first.get_attribute("href")
+        # Fallback: any anchor (caller will construct URL from bid number)
+        return None
 
     @staticmethod
     def _extract_bid_number(text: str) -> str | None:

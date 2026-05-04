@@ -9,15 +9,31 @@ class TenderBase(BaseModel):
 
     ref_number: str = Field(validation_alias=AliasChoices("ref_number", "external_id"))
     title: str
-    organisation: str | None = Field(default=None, validation_alias=AliasChoices("organisation", "buyer"))
+    organisation: str | None = Field(
+        default=None, validation_alias=AliasChoices("organisation", "buyer")
+    )
     state: str | None = None
-    portal_source: str | None = Field(default=None, validation_alias=AliasChoices("portal_source", "source"))
+    portal_source: str | None = Field(
+        default=None, validation_alias=AliasChoices("portal_source", "source")
+    )
     category: str | None = None
-    value_inr: Decimal = Field(default=Decimal("0"), validation_alias=AliasChoices("value_inr", "estimated_value"))
+    value_inr: Decimal = Field(
+        default=Decimal("0"),
+        validation_alias=AliasChoices("value_inr", "estimated_value"),
+    )
     emd_amount: Decimal = Decimal("0")
-    bid_end_date: datetime | None = Field(default=None, validation_alias=AliasChoices("bid_end_date", "deadline"))
-    published_date: datetime | None = Field(default=None, validation_alias=AliasChoices("published_date", "published_at"))
-    portal_url: str | None = Field(default=None, validation_alias=AliasChoices("portal_url", "tender_url"))
+    bid_end_date: datetime | None = Field(
+        default=None, validation_alias=AliasChoices("bid_end_date", "deadline")
+    )
+    published_date: datetime | None = Field(
+        default=None, validation_alias=AliasChoices("published_date", "published_at")
+    )
+    portal_url: str | None = Field(
+        default=None, validation_alias=AliasChoices("portal_url", "tender_url")
+    )
+    tender_id: str | None = None
+    link_type: str = "search"
+    link_verified: bool = False
     keywords: list[str] = Field(default_factory=list)
     relevance_score: int = 50
     is_active: bool = True
@@ -31,6 +47,12 @@ class TenderBase(BaseModel):
     @classmethod
     def default_keywords(cls, value: object) -> object:
         return [] if value is None else value
+
+    @field_validator("link_type", mode="before")
+    @classmethod
+    def default_link_type(cls, value: object) -> str:
+        text = str(value or "").strip()
+        return text if text in {"direct", "deep", "search"} else "search"
 
     @property
     def external_id(self) -> str:
@@ -66,7 +88,9 @@ class TenderCreate(TenderBase):
 
 
 class TenderRead(TenderBase):
-    model_config = ConfigDict(from_attributes=True, populate_by_name=True, extra="ignore")
+    model_config = ConfigDict(
+        from_attributes=True, populate_by_name=True, extra="ignore"
+    )
 
     id: int
     fetched_at: datetime | None = None

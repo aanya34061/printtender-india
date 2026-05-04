@@ -11,6 +11,9 @@ CREATE TABLE tenders (
   bid_end_date TIMESTAMPTZ,
   published_date TIMESTAMPTZ,
   portal_url TEXT,
+  tender_id TEXT,
+  link_type VARCHAR(10) DEFAULT 'search',
+  link_verified BOOLEAN DEFAULT FALSE,
   keywords TEXT[],
   relevance_score SMALLINT DEFAULT 50,
   fetched_at TIMESTAMPTZ DEFAULT NOW(),
@@ -24,6 +27,7 @@ CREATE INDEX idx_tenders_portal    ON tenders(portal_source);
 CREATE INDEX idx_tenders_category  ON tenders(category);
 CREATE INDEX idx_tenders_fts       ON tenders USING GIN(search_vector);
 CREATE INDEX idx_tenders_keywords  ON tenders USING GIN(keywords);
+CREATE INDEX idx_tenders_tender_id ON tenders(tender_id);
 
 CREATE TABLE alert_subscriptions (
   id SERIAL PRIMARY KEY,

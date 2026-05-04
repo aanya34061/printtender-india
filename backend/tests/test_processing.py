@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 import pandas as pd
 
 from app.processing.deduplicator import deduplicate
-from app.processing.normaliser import normalise
+from app.processing.normaliser import normalise, normalise_tender
 from app.processing.tagger import pipeline, tag_category
 
 
@@ -16,6 +16,9 @@ def raw_record(
     deadline_raw: str | None = None,
     portal_source: str = "CPPP",
     portal_url: str = "https://eprocure.gov.in/tender",
+    tender_id: str | None = None,
+    link_type: str = "deep",
+    link_verified: bool = False,
     fetched_at: str = "2026-05-01T00:00:00+00:00",
 ) -> dict:
     return {
@@ -27,6 +30,9 @@ def raw_record(
         "deadline_raw": deadline_raw or future_deadline(),
         "value_raw": value_raw,
         "portal_url": portal_url,
+        "tender_id": tender_id,
+        "link_type": link_type,
+        "link_verified": link_verified,
         "keyword_hit": "printing",
         "fetched_at": fetched_at,
     }
@@ -56,6 +62,43 @@ def test_normaliser_state_mapping() -> None:
     df = normalise([raw_record("A", "Book printing", state="MP")])
 
     assert df.iloc[0]["state"] == "Madhya Pradesh"
+
+
+def test_normaliser_preserves_link_metadata() -> None:
+    df = normalise(
+        [
+            raw_record(
+                "A",
+                "Book printing",
+                portal_url="https://eprocure.gov.in/eprocure/app?component=%24DirectLink&page=FrontEndTendersByNIT&service=direct&session=T&sp=S12345678",
+                tender_id="S12345678",
+                link_verified=True,
+            )
+        ]
+    )
+
+    assert df.iloc[0]["tender_id"] == "S12345678"
+    assert df.iloc[0]["link_type"] == "deep"
+    assert bool(df.iloc[0]["link_verified"]) is True
+
+
+def test_normalise_tender_accepts_fetcher_dict() -> None:
+    tender = normalise_tender(
+        raw_record(
+            "A",
+            "Book printing",
+            value_raw="2.5 Lakh",
+            portal_url="https://eprocure.gov.in/eprocure/app?component=%24DirectLink&page=FrontEndTendersByNIT&service=direct&session=T&sp=S12345678",
+            tender_id="S12345678",
+            link_verified=True,
+        )
+    )
+
+    assert tender.ref_number == "A"
+    assert tender.value_inr == 250000.0
+    assert tender.tender_id == "S12345678"
+    assert tender.link_type == "deep"
+    assert tender.link_verified is True
 
 
 def test_normaliser_drops_past_deadline_records() -> None:

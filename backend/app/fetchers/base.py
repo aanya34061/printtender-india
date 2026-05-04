@@ -5,34 +5,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-
-PRINT_KEYWORDS = [
-    "printing",
-    "offset printing",
-    "digital printing",
-    "flexographic printing",
-    "screen printing",
-    "stationery printing",
-    "brochure printing",
-    "calendar printing",
-    "book printing",
-    "textbook printing",
-    "government forms printing",
-    "gazette printing",
-    "security printing",
-    "ballot paper",
-    "postal stationery",
-    "label printing",
-    "packaging printing",
-    "flex printing",
-    "banner printing",
-    "toner cartridge",
-    "ink supply",
-    "printing machine",
-    "offset machine",
-]
-
-PRINTING_KEYWORDS = PRINT_KEYWORDS
+from app.fetchers.deeplinks import resolve_link
+from app.keywords import PRINT_KEYWORDS, PRINTING_KEYWORDS  # noqa: F401 (re-exported)
 
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 REQUEST_HEADERS = {"User-Agent": USER_AGENT}
@@ -45,7 +19,10 @@ RESULT_KEYS = (
     "deadline_raw",
     "value_raw",
     "portal_url",
+    "link_type",
     "keyword_hit",
+    "tender_id",
+    "link_verified",
     "fetched_at",
 )
 
@@ -120,7 +97,16 @@ class BaseFetcher(ABC):
         value_raw: str | None,
         portal_url: str | None,
         keyword_hit: str,
+        tender_id: str | None = None,
+        link_verified: bool = False,
     ) -> dict:
+        resolved_url, link_type = resolve_link(
+            portal_source,
+            ref_number or "",
+            tender_id,
+            portal_url,
+            link_verified,
+        )
         return {
             "ref_number": (ref_number or "").strip(),
             "title": (title or "").strip(),
@@ -129,8 +115,11 @@ class BaseFetcher(ABC):
             "portal_source": portal_source,
             "deadline_raw": (deadline_raw or "").strip(),
             "value_raw": (value_raw or "").strip(),
-            "portal_url": (portal_url or "").strip(),
+            "portal_url": resolved_url,
+            "link_type": link_type,
             "keyword_hit": keyword_hit,
+            "tender_id": tender_id,
+            "link_verified": link_verified,
             "fetched_at": datetime.now(timezone.utc).isoformat(),
         }
 

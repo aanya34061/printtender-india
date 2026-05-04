@@ -91,7 +91,9 @@ MP_STATE_TERMS = (
 
 NIC_DIRECT_RE = re.compile(r"[?&]sp=(S[^&\s\"']+)", flags=re.IGNORECASE)
 DOC_RE = re.compile(r"\.(pdf|doc|docx|xls|xlsx)(?:$|[?#])", flags=re.IGNORECASE)
-TENDER_TEXT_RE = re.compile(r"\b(tender|nit|notice|quotation|rfp|bid)\b", flags=re.IGNORECASE)
+TENDER_TEXT_RE = re.compile(
+    r"\b(tender|nit|notice|quotation|rfp|bid)\b", flags=re.IGNORECASE
+)
 
 
 class _MPRecordBuilder(BaseFetcher):
@@ -108,7 +110,9 @@ def _wait_between_requests() -> None:
 
 def _fetch_html(url: str, *, params: dict[str, str] | None = None) -> str:
     _wait_between_requests()
-    with httpx.Client(timeout=30, follow_redirects=True, headers=REQUEST_HEADERS) as client:
+    with httpx.Client(
+        timeout=30, follow_redirects=True, headers=REQUEST_HEADERS
+    ) as client:
         response = client.get(url, params=params)
         response.raise_for_status()
         return response.text
@@ -220,7 +224,11 @@ def _scrape_nic_keyword_portal(
     tenders = [
         record
         for row in soup.select("table.list_table tr, table tr")
-        if (record := _record_from_nic_row(row=row, keyword=keyword, base_url=base_url, portal_source=portal_source))
+        if (
+            record := _record_from_nic_row(
+                row=row, keyword=keyword, base_url=base_url, portal_source=portal_source
+            )
+        )
     ]
     tenders = _dedupe_by_ref(tenders)
     _builder.log_result(portal_source, keyword, len(tenders), len(tenders), "success")
@@ -256,12 +264,18 @@ async def scrape_gem_mp_async(keyword: str) -> list[dict]:
             await asyncio.sleep(random.uniform(2, 4))
             await page.goto(url, wait_until="domcontentloaded", timeout=60000)
             try:
-                await page.wait_for_selector(".bid-list-item, .card, table tr", timeout=15000)
+                await page.wait_for_selector(
+                    ".bid-list-item, .card, table tr", timeout=15000
+                )
             except PlaywrightTimeoutError:
                 _builder.log_result("GeM MP", keyword, 0, 0, "success")
                 return []
 
-            locators = [page.locator(".bid-list-item"), page.locator(".card"), page.locator("table tr")]
+            locators = [
+                page.locator(".bid-list-item"),
+                page.locator(".card"),
+                page.locator("table tr"),
+            ]
             for locator in locators:
                 count = await locator.count()
                 for index in range(count):
@@ -271,9 +285,18 @@ async def scrape_gem_mp_async(keyword: str) -> list[dict]:
                         continue
                     seen.add(text.casefold())
 
-                    bid_number = _extract_gem_bid_number(text) or f"GeM-MP-{keyword}-{index + 1}"
+                    extracted_bid_number = _extract_gem_bid_number(text)
+                    bid_number = extracted_bid_number or f"GeM-MP-{keyword}-{index + 1}"
                     direct_href = await _first_bid_details_href(item)
-                    tender_id = _gem_tender_id_from_url(direct_href) if direct_href else bid_number.replace("/", "-")
+                    tender_id = (
+                        _gem_tender_id_from_url(direct_href)
+                        if direct_href
+                        else (
+                            extracted_bid_number.replace("/", "-")
+                            if extracted_bid_number
+                            else None
+                        )
+                    )
                     portal_url = (
                         urljoin("https://bidplus.gem.gov.in", direct_href)
                         if direct_href
@@ -282,15 +305,27 @@ async def scrape_gem_mp_async(keyword: str) -> list[dict]:
                     tenders.append(
                         _builder.build_record(
                             ref_number=bid_number,
-                            title=_extract_labelled_field(text, ("Bid Title", "Item", "Title")) or text[:180],
+                            title=_extract_labelled_field(
+                                text, ("Bid Title", "Item", "Title")
+                            )
+                            or text[:180],
                             organisation=_extract_labelled_field(
                                 text,
-                                ("Ministry", "Department", "Organisation", "Organization"),
+                                (
+                                    "Ministry",
+                                    "Department",
+                                    "Organisation",
+                                    "Organization",
+                                ),
                             ),
                             state=MP_STATE,
                             portal_source=portal_source,
-                            deadline_raw=_extract_labelled_field(text, ("End Date", "Bid End Date", "Closing Date")),
-                            value_raw=_extract_labelled_field(text, ("Value", "Estimated Bid Value", "Bid Value")),
+                            deadline_raw=_extract_labelled_field(
+                                text, ("End Date", "Bid End Date", "Closing Date")
+                            ),
+                            value_raw=_extract_labelled_field(
+                                text, ("Value", "Estimated Bid Value", "Bid Value")
+                            ),
                             portal_url=portal_url,
                             keyword_hit=keyword,
                             tender_id=tender_id,
@@ -381,7 +416,9 @@ def _scrape_document_listing(
         except Exception:
             continue
     if not html:
-        _builder.log_result(portal_source, keyword, 0, 0, "error", "No listing URL responded")
+        _builder.log_result(
+            portal_source, keyword, 0, 0, "error", "No listing URL responded"
+        )
         return []
 
     soup = BeautifulSoup(html, "lxml")
@@ -392,7 +429,9 @@ def _scrape_document_listing(
             continue
         portal_url = urljoin(source_url, href)
         context = _surrounding_text(anchor)
-        if require_document and not (DOC_RE.search(portal_url) or TENDER_TEXT_RE.search(context)):
+        if require_document and not (
+            DOC_RE.search(portal_url) or TENDER_TEXT_RE.search(context)
+        ):
             continue
         if not _contains_print_keyword(context, keyword):
             continue

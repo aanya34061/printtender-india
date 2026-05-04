@@ -1,18 +1,19 @@
 import { differenceInDays, format, parseISO } from "date-fns";
 import { motion } from "framer-motion";
-import { Bookmark, BookmarkCheck, ExternalLink } from "lucide-react";
+import { Bookmark, BookmarkCheck, ClipboardCopy, ExternalLink, Link, Search } from "lucide-react";
+import { useToastStore } from "../store/toastStore.js";
 
 export const cardVariants = {
   hidden: { opacity: 0, y: 16 },
-  show: { opacity: 1, y: 0, transition: { duration: 0.28 } },
+  show: { opacity: 1, y: 0, transition: { duration: 0.3 } },
 };
 
-function portalBadge(src) {
-  if (!src) return { label: "Portal", cls: "bg-slate-500/20 text-slate-400" };
-  if (src === "CPPP") return { label: "CPPP", cls: "bg-blue-500/20 text-blue-400" };
-  if (src === "GeM") return { label: "GeM", cls: "bg-success/20 text-success" };
-  if (src.startsWith("State-")) return { label: src, cls: "bg-purple-500/20 text-purple-400" };
-  return { label: src, cls: "bg-slate-500/20 text-slate-400" };
+function portalBadgeClass(src) {
+  if (!src) return "badge badge-other";
+  if (src === "CPPP") return "badge badge-cppp";
+  if (src === "GeM") return "badge badge-gem";
+  if (src.startsWith("State-")) return "badge badge-state";
+  return "badge badge-other";
 }
 
 function deadlineInfo(dateStr) {
@@ -20,10 +21,16 @@ function deadlineInfo(dateStr) {
   try {
     const days = differenceInDays(parseISO(dateStr), new Date());
     if (days < 0) return null;
-    if (days === 0) return { label: "Closes today — Urgent!", cls: "text-danger" };
-    if (days <= 3) return { label: `Closes in ${days} days — Urgent!`, cls: "text-danger" };
-    if (days <= 7) return { label: `Closes in ${days} days`, cls: "text-warning" };
-    return { label: `Closes in ${days} days`, cls: "text-success" };
+    if (days === 0)
+      return { label: "⚠ Closes today — Urgent!", color: "var(--red)" };
+    if (days <= 3)
+      return { label: `⚠ Closes in ${days} days — Urgent!`, color: "var(--red)" };
+    if (days <= 7)
+      return { label: `⏰ Closes in ${days} days`, color: "var(--amber)" };
+    return {
+      label: `✓ Closes: ${format(parseISO(dateStr), "d MMM yyyy")}`,
+      color: "var(--green)",
+    };
   } catch {
     return null;
   }
@@ -31,35 +38,61 @@ function deadlineInfo(dateStr) {
 
 function fmtValue(val) {
   const n = Number(val);
-  if (!n) return "Value N/A";
+  if (!n) return null;
   if (n >= 10_000_000) return `₹${(n / 10_000_000).toFixed(2)} Cr`;
-  if (n >= 100_000) return `₹${(n / 100_000).toFixed(2)} L`;
+  if (n >= 100_000) return `₹${(n / 100_000).toFixed(1)} L`;
   return `₹${n.toLocaleString("en-IN")}`;
 }
 
-function fmtDate(dateStr) {
-  try { return format(parseISO(dateStr), "d MMM yyyy"); }
-  catch { return dateStr; }
-}
+const STATE_EMOJI = {
+  Delhi: "🏛️", Maharashtra: "🏙️", "Madhya Pradesh": "🌿",
+  "Uttar Pradesh": "🎪", Rajasthan: "🏜️", Gujarat: "💎",
+  Karnataka: "🌺", "Tamil Nadu": "🏛️", "West Bengal": "🐯",
+};
 
-const STATE_EMOJI = { Delhi: "🏛️", Maharashtra: "🏙️", "Madhya Pradesh": "🌿", "Uttar Pradesh": "🎪",
-  Rajasthan: "🏜️", Gujarat: "💎", Karnataka: "🌺", "Tamil Nadu": "🏛️", "West Bengal": "🐯" };
+const LINK_STYLES = {
+  direct: { border: "1.5px solid var(--accent)", background: "rgba(249,115,22,0.12)", color: "var(--accent)" },
+  deep:   { border: "1.5px solid var(--accent)", background: "transparent", color: "var(--accent)" },
+  search: { border: "1.5px solid var(--muted)",  background: "transparent", color: "var(--muted)", opacity: 0.75 },
+};
 
 export default function TenderCard({ tender, onView, isBookmarked, onBookmark }) {
-  const portal = portalBadge(tender.portal_source);
   const deadline = deadlineInfo(tender.bid_end_date);
+  const value = fmtValue(tender.value_inr);
   const emoji = STATE_EMOJI[tender.state] || "📍";
+  const portal = tender.portal_source || "Other";
+  const linkType = tender.link_type || "deep";
+  const add = useToastStore((s) => s.add);
+
+  function handleApply(e) {
+    e.stopPropagation();
+    if (!tender.portal_url) return;
+    if (linkType === "search") {
+      const confirmed = window.confirm(
+        `No direct tender link was found for ref ${tender.ref_number || ""}. This will search by ref number instead.`
+      );
+      if (!confirmed) return;
+    }
+    window.open(tender.portal_url, "_blank", "noopener,noreferrer");
+  }
+
+  async function copyRef(e) {
+    e.stopPropagation();
+    await navigator.clipboard.writeText(tender.ref_number || "");
+    add("Ref number copied", "success");
+  }
 
   return (
-    <motion.div variants={cardVariants} className="card group relative p-4">
-      {/* Top row */}
-      <div className="mb-2.5 flex items-start justify-between gap-2">
+    <motion.article
+      variants={cardVariants}
+      className="tender-card flex flex-col p-5"
+    >
+      {/* Top row: badge + bookmark */}
+      <div className="mb-3 flex items-start justify-between gap-2">
         <div className="flex flex-wrap gap-1.5">
-          <span className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${portal.cls}`}>
-            {portal.label}
-          </span>
+          <span className={portalBadgeClass(portal)}>{portal}</span>
           {tender.state && (
-            <span className="rounded-full bg-white/5 px-2.5 py-0.5 text-xs text-slate-400">
+            <span className="badge badge-other">
               {emoji} {tender.state}
             </span>
           )}
@@ -67,67 +100,96 @@ export default function TenderCard({ tender, onView, isBookmarked, onBookmark })
         <button
           type="button"
           onClick={(e) => { e.stopPropagation(); onBookmark(tender); }}
-          className="shrink-0 text-slate-500 transition hover:text-accent"
-          title={isBookmarked ? "Remove bookmark" : "Bookmark"}
+          className="shrink-0 transition"
+          style={{ color: isBookmarked ? "var(--accent)" : "var(--muted)" }}
+          title={isBookmarked ? "Remove bookmark" : "Bookmark this tender"}
         >
           {isBookmarked
-            ? <BookmarkCheck className="h-4 w-4 text-accent" />
+            ? <BookmarkCheck className="h-4 w-4" />
             : <Bookmark className="h-4 w-4" />}
         </button>
       </div>
 
       {/* Title */}
       <h3
-        className="line-clamp-2 cursor-pointer text-sm font-semibold leading-snug text-slate-100 transition group-hover:text-accent"
+        className="mb-1 line-clamp-2 cursor-pointer text-[0.95rem] font-semibold leading-snug text-slate-100 transition"
+        style={{ WebkitLineClamp: 2, display: "-webkit-box", WebkitBoxOrient: "vertical", overflow: "hidden" }}
         onClick={() => onView(tender)}
         title={tender.title}
+        onMouseEnter={(e) => e.currentTarget.style.color = "var(--accent)"}
+        onMouseLeave={(e) => e.currentTarget.style.color = ""}
       >
         {tender.title}
       </h3>
 
       {/* Organisation */}
       {tender.organisation && (
-        <p className="mt-1 truncate text-xs text-slate-500">{tender.organisation}</p>
+        <p className="mb-2 truncate text-xs" style={{ color: "var(--muted)" }}>
+          {tender.organisation}
+        </p>
       )}
 
       {/* Deadline */}
       {deadline && (
-        <p className={`mt-2 text-xs font-medium ${deadline.cls}`}>
-          📅 {deadline.label}
-          {tender.bid_end_date && ` · ${fmtDate(tender.bid_end_date)}`}
+        <p className="mb-2 text-xs font-semibold" style={{ color: deadline.color }}>
+          {deadline.label}
         </p>
       )}
 
-      {/* Value + Ref */}
-      <div className="mt-2 flex items-center justify-between">
-        <span className="text-xs font-semibold text-slate-300">{fmtValue(tender.value_inr)}</span>
-        <span className="font-mono text-xs text-slate-600" title="Reference Number">
-          {tender.ref_number?.slice(0, 20)}
+      {/* Value + ref row */}
+      <div className="mt-auto flex items-center justify-between pt-2">
+        {value ? (
+          <span
+            className="text-sm font-bold font-mono"
+            style={{ color: "var(--text)" }}
+          >
+            {value}
+          </span>
+        ) : (
+          <span className="text-xs" style={{ color: "var(--muted)" }}>Value N/A</span>
+        )}
+        <span
+          className="truncate text-xs font-mono"
+          style={{ color: "var(--muted)", maxWidth: "120px" }}
+          title={tender.ref_number}
+        >
+          {tender.ref_number?.slice(0, 18)}
         </span>
       </div>
 
-      {/* Actions */}
+      {/* CTA row */}
       <div className="mt-3 flex gap-2">
         <button
           type="button"
           onClick={() => onView(tender)}
-          className="btn-outline flex-1 rounded-lg py-1.5 text-xs font-semibold"
+          className="btn-ghost flex-1 justify-center py-1.5 text-xs"
         >
           View Details
         </button>
-        {tender.portal_url && (
-          <a
-            href={tender.portal_url}
-            target="_blank"
-            rel="noreferrer"
-            className="flex items-center gap-1 rounded-lg border border-accent/30 bg-accent/10 px-3 py-1.5 text-xs font-semibold text-accent transition hover:bg-accent/20"
-            onClick={(e) => e.stopPropagation()}
-          >
-            Apply
-            <ExternalLink className="h-3 w-3" />
-          </a>
-        )}
+        <button
+          type="button"
+          onClick={copyRef}
+          className="flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs transition"
+          style={{ border: "1px solid rgba(255,255,255,0.12)", color: "var(--muted)" }}
+          title="Copy ref number to paste in portal search"
+        >
+          <ClipboardCopy className="h-3 w-3" />
+        </button>
+        <button
+          type="button"
+          onClick={handleApply}
+          className="flex items-center gap-1 rounded-lg px-3 py-1.5 text-xs font-medium transition hover:opacity-90"
+          style={LINK_STYLES[linkType] || LINK_STYLES.deep}
+          title={
+            linkType === "direct" ? `Open on ${portal}` :
+            linkType === "deep"   ? `Deep link to ${portal}` :
+            "Exact link unavailable — will search by ref number"
+          }
+        >
+          {linkType === "search" ? <Search className="h-3 w-3" /> : linkType === "deep" ? <Link className="h-3 w-3" /> : <ExternalLink className="h-3 w-3" />}
+          View and Apply
+        </button>
       </div>
-    </motion.div>
+    </motion.article>
   );
 }

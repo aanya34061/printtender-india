@@ -1,10 +1,13 @@
 """API endpoint tests — database is fully mocked, no real connection required."""
+
 import os
 from datetime import datetime, timezone
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
-os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://user:password@localhost:5432/postgres")
+os.environ.setdefault(
+    "DATABASE_URL", "postgresql+asyncpg://user:password@localhost:5432/postgres"
+)
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 os.environ.setdefault("RESEND_API_KEY", "re_test")
 os.environ.setdefault("FRONTEND_URL", "http://localhost:5173")
@@ -20,6 +23,7 @@ from app.main import app
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_tender_row(**kwargs):
     defaults = dict(
         id=1,
@@ -34,6 +38,9 @@ def _make_tender_row(**kwargs):
         bid_end_date=datetime(2026, 6, 30, tzinfo=timezone.utc),
         published_date=datetime(2026, 4, 1, tzinfo=timezone.utc),
         portal_url="https://eprocure.gov.in/tender/1",
+        tender_id=None,
+        link_type="deep",
+        link_verified=False,
         keywords=["printing"],
         relevance_score=80,
         fetched_at=datetime(2026, 5, 1, tzinfo=timezone.utc),
@@ -47,8 +54,9 @@ def _make_tender_row(**kwargs):
     return row
 
 
-def _make_session(*, scalar_returns=None, scalars_returns=None, get_returns=None,
-                  execute_returns=None):
+def _make_session(
+    *, scalar_returns=None, scalars_returns=None, get_returns=None, execute_returns=None
+):
     session = AsyncMock()
     scalar_iter = iter(scalar_returns or [0])
 
@@ -81,6 +89,7 @@ def _make_session(*, scalar_returns=None, scalars_returns=None, get_returns=None
 def _override_db(session):
     async def _dep():
         yield session
+
     app.dependency_overrides[get_db] = _dep
 
 
@@ -92,9 +101,12 @@ def _clear():
 # Health
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_health_check():
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as c:
         r = await c.get("/health")
     assert r.status_code == 200
     assert r.json()["status"] == "ok"
@@ -105,12 +117,15 @@ async def test_health_check():
 # Tenders
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_list_tenders_200():
     row = _make_tender_row()
     _override_db(_make_session(scalar_returns=[1, 1], scalars_returns=[row]))
     try:
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as c:
             r = await c.get("/api/tenders")
         assert r.status_code == 200
         body = r.json()
@@ -123,7 +138,9 @@ async def test_list_tenders_200():
 async def test_list_tenders_empty():
     _override_db(_make_session(scalar_returns=[0, 0], scalars_returns=[]))
     try:
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as c:
             r = await c.get("/api/tenders?q=printing")
         assert r.status_code == 200
         assert r.json()["total"] == 0
@@ -134,10 +151,16 @@ async def test_list_tenders_empty():
 
 @pytest.mark.asyncio
 async def test_list_tenders_with_filters():
-    _override_db(_make_session(scalar_returns=[5, 5], scalars_returns=[_make_tender_row()]))
+    _override_db(
+        _make_session(scalar_returns=[5, 5], scalars_returns=[_make_tender_row()])
+    )
     try:
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
-            r = await c.get("/api/tenders?q=printing&state=Delhi&portal=CPPP&deadline_within_days=7")
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as c:
+            r = await c.get(
+                "/api/tenders?q=printing&state=Delhi&portal=CPPP&deadline_within_days=7"
+            )
         assert r.status_code == 200
     finally:
         _clear()
@@ -148,7 +171,9 @@ async def test_get_tender_detail():
     row = _make_tender_row()
     _override_db(_make_session(get_returns=row))
     try:
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as c:
             r = await c.get("/api/tenders/1")
         assert r.status_code == 200
         body = r.json()
@@ -160,11 +185,34 @@ async def test_get_tender_detail():
 
 
 @pytest.mark.asyncio
+async def test_get_tender_replaces_generic_homepage_link():
+    row = _make_tender_row(
+        ref_number="CPPP/2025/04/123",
+        portal_url="https://eprocure.gov.in/",
+        tender_id="S12345678",
+        link_verified=False,
+    )
+    _override_db(_make_session(get_returns=row))
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as c:
+            r = await c.get("/api/tenders/1")
+        body = r.json()
+        assert body["link_type"] == "deep"
+        assert "sp=S12345678" in body["portal_url"]
+    finally:
+        _clear()
+
+
+@pytest.mark.asyncio
 async def test_get_tender_apply_steps_cppp():
     row = _make_tender_row(portal_source="CPPP")
     _override_db(_make_session(get_returns=row))
     try:
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as c:
             r = await c.get("/api/tenders/1")
         steps = r.json()["apply_steps"]
         assert any("eprocure" in s for s in steps)
@@ -177,7 +225,9 @@ async def test_get_tender_apply_steps_gem():
     row = _make_tender_row(portal_source="GeM")
     _override_db(_make_session(get_returns=row))
     try:
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as c:
             r = await c.get("/api/tenders/1")
         steps = r.json()["apply_steps"]
         assert any("gem.gov.in" in s for s in steps)
@@ -189,7 +239,9 @@ async def test_get_tender_apply_steps_gem():
 async def test_get_tender_not_found():
     _override_db(_make_session(get_returns=None))
     try:
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as c:
             r = await c.get("/api/tenders/999")
         assert r.status_code == 404
     finally:
@@ -200,7 +252,9 @@ async def test_get_tender_not_found():
 async def test_tender_count():
     _override_db(_make_session(scalar_returns=[42]))
     try:
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as c:
             r = await c.get("/api/tenders/count")
         assert r.status_code == 200
         assert r.json()["count"] == 42
@@ -212,20 +266,31 @@ async def test_tender_count():
 # Stats
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_get_stats_200():
-    _override_db(_make_session(
-        scalar_returns=[10, 5, 8, 3, 7, datetime(2026, 5, 1, tzinfo=timezone.utc)],
-        scalars_returns=[["printing"]],
-        execute_returns=[],
-    ))
+    _override_db(
+        _make_session(
+            scalar_returns=[10, 5, 8, 3, 7, datetime(2026, 5, 1, tzinfo=timezone.utc)],
+            scalars_returns=[["printing"]],
+            execute_returns=[],
+        )
+    )
     try:
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as c:
             r = await c.get("/api/stats")
         assert r.status_code == 200
         body = r.json()
-        for key in ("total_active", "total_today", "expiring_7_days", "new_since_yesterday",
-                    "states_covered", "by_portal"):
+        for key in (
+            "total_active",
+            "total_today",
+            "expiring_7_days",
+            "new_since_yesterday",
+            "states_covered",
+            "by_portal",
+        ):
             assert key in body, f"missing key: {key}"
     finally:
         _clear()
@@ -235,7 +300,9 @@ async def test_get_stats_200():
 async def test_portal_status():
     _override_db(_make_session())
     try:
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as c:
             r = await c.get("/api/stats/portals/status")
         assert r.status_code == 200
         assert isinstance(r.json(), list)
@@ -246,6 +313,7 @@ async def test_portal_status():
 # ---------------------------------------------------------------------------
 # Alerts
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_subscribe_valid_201():
@@ -276,10 +344,16 @@ async def test_subscribe_valid_201():
     _override_db(session)
     with patch("app.api.alerts.send_welcome_email"):
         try:
-            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            async with AsyncClient(
+                transport=ASGITransport(app=app), base_url="http://test"
+            ) as c:
                 r = await c.post(
                     "/api/alerts/subscribe",
-                    json={"email": "press@example.com", "keywords": ["printing"], "frequency": "daily"},
+                    json={
+                        "email": "press@example.com",
+                        "keywords": ["printing"],
+                        "frequency": "daily",
+                    },
                 )
             assert r.status_code == 201
         finally:
@@ -288,17 +362,25 @@ async def test_subscribe_valid_201():
 
 @pytest.mark.asyncio
 async def test_subscribe_invalid_email_422():
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as c:
         r = await c.post(
             "/api/alerts/subscribe",
-            json={"email": "not-an-email", "keywords": ["printing"], "frequency": "daily"},
+            json={
+                "email": "not-an-email",
+                "keywords": ["printing"],
+                "frequency": "daily",
+            },
         )
     assert r.status_code == 422
 
 
 @pytest.mark.asyncio
 async def test_subscribe_empty_keywords_422():
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as c:
         r = await c.post(
             "/api/alerts/subscribe",
             json={"email": "press@example.com", "keywords": [], "frequency": "daily"},
@@ -308,15 +390,22 @@ async def test_subscribe_empty_keywords_422():
 
 @pytest.mark.asyncio
 async def test_subscribe_invalid_frequency_422():
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as c:
         r = await c.post(
             "/api/alerts/subscribe",
-            json={"email": "press@example.com", "keywords": ["printing"], "frequency": "hourly"},
+            json={
+                "email": "press@example.com",
+                "keywords": ["printing"],
+                "frequency": "hourly",
+            },
         )
     assert r.status_code == 422
 
 
 # ── New POST /api/alerts endpoint ─────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_new_alert_endpoint_201():
@@ -338,10 +427,16 @@ async def test_new_alert_endpoint_201():
     _override_db(session)
     with patch("app.api.alerts.send_confirmation_email"):
         try:
-            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            async with AsyncClient(
+                transport=ASGITransport(app=app), base_url="http://test"
+            ) as c:
                 r = await c.post(
                     "/api/alerts",
-                    json={"email": "test@test.com", "keyword": "printing", "frequency": "daily"},
+                    json={
+                        "email": "test@test.com",
+                        "keyword": "printing",
+                        "frequency": "daily",
+                    },
                 )
             assert r.status_code == 201
             assert "message" in r.json()
@@ -351,17 +446,22 @@ async def test_new_alert_endpoint_201():
 
 @pytest.mark.asyncio
 async def test_new_alert_invalid_email_422():
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as c:
         r = await c.post("/api/alerts", json={"email": "bad", "keyword": "printing"})
     assert r.status_code == 422
 
 
 # ── Fetch trigger ─────────────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_fetch_trigger():
     with patch("app.api.fetch.run_fetch_cycle", new=AsyncMock(return_value=5)):
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as c:
             r = await c.post("/api/fetch/trigger")
         assert r.status_code == 200
         assert r.json()["status"] == "triggered"

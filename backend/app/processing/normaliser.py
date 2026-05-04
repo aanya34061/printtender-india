@@ -6,6 +6,7 @@ from urllib.parse import urlparse
 import dateparser
 import pandas as pd
 
+from app.fetchers.deeplinks import build_deep_link, classify_link, is_generic_link
 from app.fetchers.base import PRINT_KEYWORDS, RawTender
 from app.schemas import TenderCreate
 
@@ -26,6 +27,11 @@ STATE_NAMES = {
 PORTAL_BASE_URLS = {
     "CPPP": "https://eprocure.gov.in",
     "GeM": "https://bidplus.gem.gov.in",
+    "MP Tenders": "https://mptenders.gov.in",
+    "MP PWD": "https://mpeprocurement.gov.in",
+    "MPBSE": "https://mpbse.nic.in",
+    "MP Forest": "https://mpforest.gov.in",
+    "MP Info": "https://mpinfo.org",
     "State-MP": "https://mptenders.gov.in",
     "State-UP": "https://etender.up.nic.in",
     "State-MH": "https://mahatenders.gov.in",
@@ -44,18 +50,29 @@ def normalise(raw: list[dict]) -> pd.DataFrame:
             continue
 
         keywords = find_print_keywords(title)
+        portal_source = str(item.get("portal_source") or "").strip()
+        tender_id = clean_optional_text(item.get("tender_id"))
+        link_verified = parse_bool(item.get("link_verified"))
+        portal_url = normalise_url(item.get("portal_url"), portal_source)
+        if is_generic_link(portal_url):
+            portal_url = build_deep_link(portal_source, ref_number, tender_id)
+            link_verified = False
+        link_type = clean_link_type(item.get("link_type")) or classify_link(
+            portal_url, link_verified
+        )
         rows.append(
             {
                 "ref_number": ref_number,
                 "title": title,
                 "organisation": str(item.get("organisation") or "").strip(),
                 "state": normalise_state(item.get("state")),
-                "portal_source": str(item.get("portal_source") or "").strip(),
+                "portal_source": portal_source,
                 "bid_end_date": bid_end_date,
                 "value_inr": parse_value(item.get("value_raw")),
-                "portal_url": normalise_url(
-                    item.get("portal_url"), item.get("portal_source")
-                ),
+                "portal_url": portal_url,
+                "tender_id": tender_id,
+                "link_type": link_type,
+                "link_verified": link_verified,
                 "keyword_hit": str(item.get("keyword_hit") or "").strip(),
                 "keywords": keywords,
                 "relevance_score": min(100, len(keywords) * 20),
@@ -140,6 +157,24 @@ def normalise_url(value: object, portal_source: object) -> str:
     return f"{base_url}{url}"
 
 
+def clean_optional_text(value: object) -> str | None:
+    text = str(value or "").strip()
+    return text or None
+
+
+def parse_bool(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    return str(value).strip().casefold() in {"1", "true", "yes", "y"}
+
+
+def clean_link_type(value: object) -> str | None:
+    text = str(value or "").strip()
+    return text if text in {"direct", "deep", "search"} else None
+
+
 def find_print_keywords(title: str) -> list[str]:
     normalized = title.casefold()
     return [keyword for keyword in PRINT_KEYWORDS if keyword.casefold() in normalized]
@@ -151,7 +186,60 @@ def parse_datetime(value: datetime | str | None) -> datetime | None:
     return parse_bid_end_date(value)
 
 
-def normalise_tender(raw: RawTender) -> TenderCreate:
+def normalise_tender(raw: RawTender | dict[str, Any]) -> TenderCreate:
+    if isinstance(raw, dict):
+        title = " ".join(str(raw.get("title") or "").split())
+        portal_source = str(raw.get("portal_source") or raw.get("source") or "").strip()
+        ref_number = (
+            str(raw.get("ref_number") or raw.get("external_id") or "").strip().upper()
+        )
+        bid_end_date = parse_datetime(
+            raw.get("bid_end_date") or raw.get("deadline") or raw.get("deadline_raw")
+        )
+        keyword_hit = clean_optional_text(raw.get("keyword_hit"))
+        keywords = set(find_print_keywords(title))
+        if keyword_hit:
+            keywords.add(keyword_hit)
+        tender_id = clean_optional_text(raw.get("tender_id"))
+        link_verified = parse_bool(raw.get("link_verified"))
+        portal_url = normalise_url(
+            raw.get("portal_url") or raw.get("tender_url"), portal_source
+        )
+        if is_generic_link(portal_url):
+            portal_url = build_deep_link(portal_source, ref_number, tender_id)
+            link_verified = False
+        link_type = clean_link_type(raw.get("link_type")) or classify_link(
+            portal_url, link_verified
+        )
+
+        return TenderCreate(
+            ref_number=ref_number,
+            title=title,
+            organisation=clean_optional_text(
+                raw.get("organisation") or raw.get("buyer")
+            ),
+            state=normalise_state(raw.get("state")),
+            portal_source=portal_source,
+            category=clean_optional_text(raw.get("category")),
+            value_inr=parse_value(
+                raw.get("value_inr")
+                or raw.get("estimated_value")
+                or raw.get("value_raw")
+            ),
+            emd_amount=parse_value(raw.get("emd_amount")),
+            bid_end_date=bid_end_date,
+            published_date=parse_datetime(
+                raw.get("published_date") or raw.get("published_at")
+            ),
+            portal_url=portal_url,
+            tender_id=tender_id,
+            link_type=link_type,
+            link_verified=link_verified,
+            keywords=sorted(keywords),
+            relevance_score=min(100, len(keywords) * 20) if keywords else 50,
+            is_active=bool(bid_end_date and bid_end_date > datetime.now(timezone.utc)),
+        )
+
     payload = asdict(raw)
     payload["title"] = " ".join(raw.title.split())
     payload["deadline"] = parse_datetime(raw.deadline)
