@@ -7,8 +7,17 @@ from sqlalchemy.dialects.postgresql import insert
 from app.config import get_settings
 from app.database import async_session
 from app.email_service import send_tender_alert_email
-from app.fetchers.cppp import CPPPFetcher
+from app.fetchers.cppp import CPPPFetcher, scrape_cppp_mp
 from app.fetchers.gem import GeMFetcher
+from app.fetchers.mp_portals import (
+    MP_PRINT_KEYWORDS,
+    scrape_gem_mp_async,
+    scrape_mp_forest,
+    scrape_mp_info,
+    scrape_mp_pwd,
+    scrape_mp_tenders,
+    scrape_mpbse,
+)
 from app.fetchers.state import StateFetcher
 from app.models import AlertSubscription, FetchLog, Tender
 from app.processing.deduplicator import deduplicate_tenders
@@ -112,10 +121,38 @@ async def run_fetch_cycle() -> int:
         "State", len(state_raw), "ok" if state_err is None else "error", state_err
     )
 
+    mp_sync_scrapers = [
+        ("MP Tenders", scrape_mp_tenders),
+        ("MP PWD", scrape_mp_pwd),
+        ("CPPP MP", scrape_cppp_mp),
+        ("MPBSE", scrape_mpbse),
+        ("MP Forest", scrape_mp_forest),
+        ("MP Info", scrape_mp_info),
+    ]
+    for keyword in MP_PRINT_KEYWORDS:
+        for label, scraper in mp_sync_scrapers:
+            portal_label, raw, err = _fetch_by_source(
+                label, lambda s=scraper, k=keyword: s(k)
+            )
+            all_raw.extend(raw)
+            await _log_fetch(
+                portal_label, len(raw), "ok" if err is None else "error", err
+            )
+        try:
+            gem_mp_raw = await scrape_gem_mp_async(keyword)
+            all_raw.extend(gem_mp_raw)
+            await _log_fetch("GeM MP", len(gem_mp_raw), "ok")
+        except Exception as exc:
+            await _log_fetch("GeM MP", 0, "error", str(exc))
+
     tenders = deduplicate_tenders([normalise_tender(r) for r in all_raw])
     new_ids = await _upsert_tenders(tenders)
-    await send_matching_alerts(new_ids)
-    return len(tenders)
+    alert_count = await send_matching_alerts(new_ids)
+    print(
+        "fetch_cycle_summary "
+        f"total_new_tenders={len(new_ids)} alert_emails_dispatched={alert_count}"
+    )
+    return len(new_ids)
 
 
 async def send_matching_alerts(new_tender_ids: list[int]) -> int:
