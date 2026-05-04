@@ -12,8 +12,15 @@ function portalBadgeClass(src) {
   if (!src) return "badge badge-other";
   if (src === "CPPP") return "badge badge-cppp";
   if (src === "GeM") return "badge badge-gem";
-  if (src.startsWith("State-")) return "badge badge-state";
+  if (isMpPortal(src)) return "badge badge-mp";
+  if (src === "TenderTiger") return "badge badge-tendertiger";
+  if (src === "TenderDekho") return "badge badge-tenderdekho";
+  if (src === "BidAssist") return "badge badge-bidassist";
   return "badge badge-other";
+}
+
+function isMpPortal(src) {
+  return ["MP Tenders", "MP PWD", "MPBSE", "MP Forest", "MP Info", "State-MP"].includes(src);
 }
 
 function deadlineInfo(dateStr) {

@@ -60,22 +60,15 @@ async def get_stats(session: AsyncSession = Depends(get_db)) -> dict:
     )
     last_fetch = await session.scalar(select(func.max(FetchLog.fetched_at)))
 
-    # by_portal bucketing
     rows = await session.execute(
         select(Tender.portal_source, func.count().label("cnt"))
         .where(Tender.is_active.is_(True))
         .group_by(Tender.portal_source)
     )
-    by_portal: dict[str, int] = {"CPPP": 0, "GeM": 0, "State": 0, "Other": 0}
+    by_portal: dict[str, int] = {}
     for source, cnt in rows:
-        if source == "CPPP":
-            by_portal["CPPP"] += cnt
-        elif source == "GeM":
-            by_portal["GeM"] += cnt
-        elif source and source.startswith("State-"):
-            by_portal["State"] += cnt
-        else:
-            by_portal["Other"] += cnt
+        label = source or "Unknown"
+        by_portal[label] = cnt
 
     alert_rows = await session.scalars(
         select(AlertSubscription.keywords).where(AlertSubscription.is_active.is_(True))
@@ -90,7 +83,7 @@ async def get_stats(session: AsyncSession = Depends(get_db)) -> dict:
         "states_covered": states_covered,
         "by_portal": by_portal,
         "last_fetch": last_fetch,
-        "portals_count": sum(1 for v in by_portal.values() if v > 0),
+        "portals_count": len(by_portal),
         "keywords_tracked": keywords_tracked,
     }
 

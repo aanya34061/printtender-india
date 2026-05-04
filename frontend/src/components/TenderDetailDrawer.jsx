@@ -8,6 +8,17 @@ import { useToastStore } from "../store/toastStore.js";
 
 const BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
 
+function portalBadgeClass(src) {
+  if (!src) return "badge badge-other";
+  if (src === "CPPP") return "badge badge-cppp";
+  if (src === "GeM") return "badge badge-gem";
+  if (["MP Tenders", "MP PWD", "MPBSE", "MP Forest", "MP Info", "State-MP"].includes(src)) return "badge badge-mp";
+  if (src === "TenderTiger") return "badge badge-tendertiger";
+  if (src === "TenderDekho") return "badge badge-tenderdekho";
+  if (src === "BidAssist") return "badge badge-bidassist";
+  return "badge badge-other";
+}
+
 function useDetail(id) {
   return useQuery({
     queryKey: ["tender", id],
@@ -104,7 +115,7 @@ export default function TenderDetailDrawer({ tenderId, onClose, onSetAlert }) {
                   {/* Badges */}
                   <div className="mb-4 flex flex-wrap gap-2">
                     {tender.portal_source && (
-                      <span className={`badge badge-${tender.portal_source === "CPPP" ? "cppp" : tender.portal_source === "GeM" ? "gem" : tender.portal_source?.startsWith("State-") ? "state" : "other"}`}>
+                      <span className={portalBadgeClass(tender.portal_source)}>
                         {tender.portal_source}
                       </span>
                     )}

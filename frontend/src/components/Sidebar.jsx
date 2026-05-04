@@ -7,7 +7,16 @@ import { useStats } from "../hooks/useStats.js";
 import { useFilterStore } from "../store/filterStore.js";
 
 const BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
-const COLORS = { CPPP: "#3b82f6", GeM: "#22c55e", State: "#a855f7", Other: "#64748b" };
+
+function portalColor(name) {
+  if (name === "CPPP") return "#3b82f6";
+  if (name === "GeM") return "#22c55e";
+  if (["MP Tenders", "MP PWD", "MPBSE", "MP Forest", "MP Info", "State-MP"].includes(name)) return "#f97316";
+  if (name === "TenderTiger") return "#a855f7";
+  if (name === "TenderDekho") return "#14b8a6";
+  if (name === "BidAssist") return "#eab308";
+  return "#64748b";
+}
 
 function useExpiringSoon() {
   return useQuery({
@@ -53,7 +62,7 @@ export default function Sidebar({ bookmarks, onView }) {
           <PieChart width={200} height={160} className="mx-auto">
             <Pie data={portalData} cx={100} cy={75} innerRadius={42} outerRadius={62} paddingAngle={2} dataKey="value">
               {portalData.map((entry) => (
-                <Cell key={entry.name} fill={COLORS[entry.name] ?? "#64748b"} />
+                <Cell key={entry.name} fill={portalColor(entry.name)} />
               ))}
             </Pie>
             <Tooltip
@@ -72,7 +81,7 @@ export default function Sidebar({ bookmarks, onView }) {
               <button
                 key={d.name}
                 type="button"
-                onClick={() => { setPortal(d.name.startsWith("State") ? null : d.name); setQ("printing"); }}
+                onClick={() => { setPortal(d.name); setQ("printing"); }}
                 className="flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-xs transition"
                 style={{ color: "var(--muted)" }}
                 onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(249,115,22,0.08)"; e.currentTarget.style.color = "var(--accent)"; }}
@@ -80,10 +89,10 @@ export default function Sidebar({ bookmarks, onView }) {
                 title={`Show ${d.name} tenders`}
               >
                 <span className="flex items-center gap-1.5">
-                  <span className="h-2 w-2 rounded-full" style={{ background: COLORS[d.name] ?? "#64748b" }} />
+                  <span className="h-2 w-2 rounded-full" style={{ background: portalColor(d.name) }} />
                   {d.name}
                 </span>
-                <span className="font-semibold" style={{ color: COLORS[d.name] ?? "#64748b" }}>{d.value} →</span>
+                <span className="font-semibold" style={{ color: portalColor(d.name) }}>{d.value} →</span>
               </button>
             ))}
           </div>
