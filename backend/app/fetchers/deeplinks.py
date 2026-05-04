@@ -85,6 +85,8 @@ def is_generic_link(url: str | None) -> bool:
         query = parse_qs(parsed.query)
         if not path:
             return True
+        if parsed.netloc.endswith("bidplus.gem.gov.in") and path == "all-bids":
+            return True
         if _query_contains_specific_ref(query):
             return False
         if _path_has_slug_identifier(path):
@@ -110,8 +112,8 @@ def build_deep_link(portal: str, ref_number: str, tender_id: str | None = None) 
         return _nic_search_link(base, ref)
 
     if portal_name == "GeM":
-        bid_id = tid
-        if bid_id and _looks_like_gem_bid_id(bid_id):
+        bid_id = _normalise_gem_bid_id(tid) or _normalise_gem_bid_id(ref)
+        if bid_id:
             return f"https://bidplus.gem.gov.in/bidding/bid-details/{quote(bid_id, safe='')}"
         return f"https://bidplus.gem.gov.in/all-bids?search_bid={quote_plus(ref)}"
 
@@ -241,3 +243,17 @@ def _looks_like_gem_bid_id(value: str) -> bool:
             flags=re.IGNORECASE,
         )
     )
+
+
+def _normalise_gem_bid_id(value: str) -> str | None:
+    text = (value or "").strip()
+    if not _looks_like_gem_bid_id(text):
+        return None
+    match = re.search(
+        r"\b((?:GEM|BID)[/-]\d{4}[/-]B[/-]\d+)\b",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return None
+    return match.group(1).upper().replace("/", "-")

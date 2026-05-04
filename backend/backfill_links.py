@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import asyncio
 
-from sqlalchemy import or_, select
+from sqlalchemy import and_, or_, select
 
-from app.database import async_session
+from app.database import async_session, run_startup_migrations
 from app.fetchers.deeplinks import (
     GENERIC_HOMEPAGE_URLS,
     build_deep_link,
@@ -27,6 +27,13 @@ async def backfill_bad_links() -> int:
                     Tender.portal_url.in_(homepage_values),
                     Tender.link_type.is_(None),
                     Tender.link_type == "",
+                    and_(
+                        Tender.portal_source == "GeM",
+                        or_(
+                            Tender.portal_url.is_(None),
+                            Tender.portal_url.not_ilike("%bid-details%"),
+                        ),
+                    ),
                 )
             )
         )
@@ -34,7 +41,10 @@ async def backfill_bad_links() -> int:
         updated = 0
         for tender in tenders:
             url = (tender.portal_url or "").strip()
-            if is_generic_link(url):
+            is_bad_gem_link = (
+                tender.portal_source == "GeM" and "bid-details" not in url
+            )
+            if is_bad_gem_link or is_generic_link(url):
                 url = build_deep_link(
                     tender.portal_source or "",
                     tender.ref_number,
@@ -52,5 +62,10 @@ async def backfill_bad_links() -> int:
         return updated
 
 
+async def main() -> int:
+    await run_startup_migrations()
+    return await backfill_bad_links()
+
+
 if __name__ == "__main__":
-    print(asyncio.run(backfill_bad_links()))
+    print(asyncio.run(main()))

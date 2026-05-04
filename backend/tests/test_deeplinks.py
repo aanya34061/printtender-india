@@ -32,17 +32,16 @@ def test_fallback_is_not_homepage():
     assert link not in GENERIC_HOMEPAGE_URLS
 
 
-def test_gem_with_ref_uses_search_url():
+def test_gem_with_tender_id_uses_bid_details():
     link = build_deep_link("GeM", "GEM/2025/B/12345", "GEM-2025-B-12345")
     assert "bidplus.gem.gov.in" in link
     assert "bid-details" in link
     assert "GEM" in link
 
 
-def test_gem_search_url_encodes_ref():
+def test_gem_ref_without_tender_id_uses_bid_details():
     link = build_deep_link("GeM", "GEM/2025/B/99", None)
-    assert "bidplus.gem.gov.in" in link
-    assert "search_bid" in link
+    assert link == "https://bidplus.gem.gov.in/bidding/bid-details/GEM-2025-B-99"
 
 
 def test_gem_without_ref_falls_back_to_all_bids():
