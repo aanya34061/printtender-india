@@ -5,6 +5,7 @@ from app.fetchers.deeplinks import (
     extract_nic_tender_id,
     is_generic_homepage_url,
     is_generic_link,
+    resolve_link,
 )
 
 
@@ -32,21 +33,43 @@ def test_fallback_is_not_homepage():
     assert link not in GENERIC_HOMEPAGE_URLS
 
 
-def test_gem_with_tender_id_uses_bid_details():
+def test_gem_with_captured_card_href_uses_actual_href():
+    link = build_deep_link("GeM", "GEM/2025/B/12345", "/showbidDocument/123456")
+    assert link == "https://bidplus.gem.gov.in/showbidDocument/123456"
+
+
+def test_gem_with_captured_document_id_uses_showbid_document():
+    link = build_deep_link("GeM", "GEM/2025/B/12345", "123456")
+    assert link == "https://bidplus.gem.gov.in/showbidDocument/123456"
+
+
+def test_gem_with_tender_id_does_not_construct_bid_details():
     link = build_deep_link("GeM", "GEM/2025/B/12345", "GEM-2025-B-12345")
-    assert "bidplus.gem.gov.in" in link
-    assert "bid-details" in link
-    assert "GEM" in link
+    assert link == "https://bidplus.gem.gov.in/all-bids"
+    assert "bid-details" not in link
 
 
-def test_gem_ref_without_tender_id_uses_bid_details():
+def test_gem_ref_without_tender_id_falls_back_to_all_bids():
     link = build_deep_link("GeM", "GEM/2025/B/99", None)
-    assert link == "https://bidplus.gem.gov.in/bidding/bid-details/GEM-2025-B-99"
+    assert link == "https://bidplus.gem.gov.in/all-bids"
 
 
 def test_gem_without_ref_falls_back_to_all_bids():
     link = build_deep_link("GeM", "", None)
-    assert link == "https://bidplus.gem.gov.in/all-bids?search_bid="
+    assert link == "https://bidplus.gem.gov.in/all-bids"
+
+
+def test_gem_resolve_link_preserves_captured_direct_url():
+    url, link_type = resolve_link(
+        "GeM",
+        "GEM/2026/B/7439701",
+        None,
+        "https://bidplus.gem.gov.in/showbidDocument/9217773",
+        True,
+    )
+
+    assert url == "https://bidplus.gem.gov.in/showbidDocument/9217773"
+    assert link_type == "direct"
 
 
 def test_state_mp_with_tender_id():

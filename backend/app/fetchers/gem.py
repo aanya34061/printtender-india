@@ -66,6 +66,7 @@ class GeMFetcher(BaseFetcher):
             count = await locator.count()
             for index in range(count):
                 item = locator.nth(index)
+                direct_link = await self._first_bid_card_href(item)
                 text = " ".join((await item.inner_text()).split())
                 if not text or text.casefold() in seen:
                     continue
@@ -74,8 +75,6 @@ class GeMFetcher(BaseFetcher):
                 extracted_bid_number = self._extract_bid_number(text)
                 bid_number = extracted_bid_number or f"GeM-{keyword}-{index + 1}"
 
-                # Prefer a direct bid-details link from the card's anchor tags
-                direct_link = await self._first_bid_details_link(item)
                 if direct_link:
                     portal_url = (
                         direct_link
@@ -83,19 +82,9 @@ class GeMFetcher(BaseFetcher):
                         else urljoin("https://bidplus.gem.gov.in", direct_link)
                     )
                     link_verified = True
-                    # Derive tender_id from URL: .../bid-details/BID-2025-B-12345
-                    tid_match = re.search(r"bid-details/(.+?)(?:\?|$)", portal_url)
-                    tender_id = (
-                        tid_match.group(1)
-                        if tid_match
-                        else bid_number.replace("/", "-")
-                    )
+                    tender_id = self._document_id_from_url(portal_url) or bid_number
                 else:
-                    tender_id = (
-                        extracted_bid_number.replace("/", "-")
-                        if extracted_bid_number
-                        else None
-                    )
+                    tender_id = extracted_bid_number
                     portal_url = build_deep_link(
                         self.portal_source, bid_number, tender_id
                     )
@@ -132,19 +121,21 @@ class GeMFetcher(BaseFetcher):
             return None
         return await links.first.get_attribute("href")
 
-    async def _first_bid_details_link(self, item) -> str | None:
-        """Return the direct bid-details href if present on the card, else None."""
-        # Prefer anchor with bid-details in the href
-        bid_links = item.locator("a[href*='bid-details']")
+    async def _first_bid_card_href(self, item) -> str | None:
+        bid_links = item.locator("a[href*='showbidDocument']")
         if await bid_links.count() > 0:
             return await bid_links.first.get_attribute("href")
-        # Fallback: any anchor (caller will construct URL from bid number)
-        return None
+        return await self._first_link(item)
 
     @staticmethod
     def _extract_bid_number(text: str) -> str | None:
         match = re.search(r"\bGEM/\d{4}/B/\d+\b", text, flags=re.IGNORECASE)
         return match.group(0) if match else None
+
+    @staticmethod
+    def _document_id_from_url(url: str) -> str | None:
+        match = re.search(r"showbidDocument/([^?#]+)", url)
+        return match.group(1) if match else None
 
     @staticmethod
     def _extract_field(text: str, labels: tuple[str, ...]) -> str | None:

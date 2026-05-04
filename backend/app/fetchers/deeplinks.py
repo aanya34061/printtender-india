@@ -67,11 +67,12 @@ GENERIC_PATH_SEGMENTS = {
 }
 
 TENDER_IDENTIFIER_RE = re.compile(
-    r"(?:[?&]sp=S[^&\s]+|bid-details|tenderRef|NIT|DirectLink)",
+    r"(?:[?&]sp=S[^&\s]+|bid-details|showbidDocument|tenderRef|NIT|DirectLink)",
     flags=re.IGNORECASE,
 )
 NIC_PORTAL_HOSTS = frozenset(urlparse(base).netloc for base in NIC_PORTAL_BASES.values())
 NIC_DIRECT_SP_RE = re.compile(r"[?&]sp=S[^&\s\"']+", flags=re.IGNORECASE)
+GEM_ALL_BIDS_URL = "https://bidplus.gem.gov.in/all-bids"
 
 
 def is_generic_link(url: str | None) -> bool:
@@ -125,10 +126,14 @@ def build_deep_link(portal: str, ref_number: str, tender_id: str | None = None) 
         return _nic_search_link(base, ref)
 
     if portal_name == "GeM":
-        bid_id = _normalise_gem_bid_id(tid) or _normalise_gem_bid_id(ref)
-        if bid_id:
-            return f"https://bidplus.gem.gov.in/bidding/bid-details/{quote(bid_id, safe='')}"
-        return f"https://bidplus.gem.gov.in/all-bids?search_bid={quote_plus(ref)}"
+        direct_href = (
+            _normalise_gem_card_href(tid)
+            or _normalise_gem_document_id(tid)
+            or _normalise_gem_card_href(ref)
+        )
+        if direct_href:
+            return direct_href
+        return GEM_ALL_BIDS_URL
 
     if portal_name in {"TenderDekho", "Tender Dekho"}:
         if tid:
@@ -297,25 +302,21 @@ def _looks_like_reference(value: str) -> bool:
     return bool(re.search(r"\b[A-Z0-9][A-Z0-9/-]{5,}\b", text, flags=re.IGNORECASE))
 
 
-def _looks_like_gem_bid_id(value: str) -> bool:
-    return bool(
-        re.search(
-            r"\b(?:GEM/\d{4}/B/\d+|GEM-\d{4}-B-\d+|BID-\d{4}-B-\d+)\b",
-            value or "",
-            flags=re.IGNORECASE,
-        )
-    )
-
-
-def _normalise_gem_bid_id(value: str) -> str | None:
+def _normalise_gem_card_href(value: str) -> str | None:
     text = (value or "").strip()
-    if not _looks_like_gem_bid_id(text):
+    if not text:
         return None
-    match = re.search(
-        r"\b((?:GEM|BID)[/-]\d{4}[/-]B[/-]\d+)\b",
-        text,
-        flags=re.IGNORECASE,
-    )
-    if not match:
+    parsed = urlparse(text)
+    path = parsed.path if parsed.scheme and parsed.netloc else text
+    if not re.search(r"(?:^|/)showbidDocument/\d+(?:[?#].*)?$", path):
         return None
-    return match.group(1).upper().replace("/", "-")
+    if parsed.scheme and parsed.netloc:
+        return text
+    return f"https://bidplus.gem.gov.in/{path.lstrip('/')}"
+
+
+def _normalise_gem_document_id(value: str) -> str | None:
+    text = (value or "").strip()
+    if not re.fullmatch(r"\d+", text):
+        return None
+    return f"https://bidplus.gem.gov.in/showbidDocument/{text}"

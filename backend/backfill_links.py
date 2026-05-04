@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 
 from sqlalchemy import and_, or_, select
 
@@ -14,6 +15,12 @@ from app.fetchers.deeplinks import (
     is_generic_link,
 )
 from app.models import Tender
+
+
+BAD_GEM_BID_DETAILS_RE = re.compile(
+    r"/bid-details/(?:GEM|BID)-\d{4}-B-\d+\b",
+    flags=re.IGNORECASE,
+)
 
 
 async def backfill_bad_links() -> int:
@@ -35,7 +42,7 @@ async def backfill_bad_links() -> int:
                         Tender.portal_source == "GeM",
                         or_(
                             Tender.portal_url.is_(None),
-                            Tender.portal_url.not_ilike("%bid-details%"),
+                            Tender.portal_url.ilike("%/bid-details/%"),
                         ),
                     ),
                     and_(
@@ -60,7 +67,8 @@ async def backfill_bad_links() -> int:
         for tender in tenders:
             url = (tender.portal_url or "").strip()
             is_bad_gem_link = (
-                tender.portal_source == "GeM" and "bid-details" not in url
+                tender.portal_source == "GeM"
+                and BAD_GEM_BID_DETAILS_RE.search(url) is not None
             )
             is_bad_nic_link = (
                 tender.portal_source in NIC_PORTAL_BASES and not has_nic_direct_sp(url)

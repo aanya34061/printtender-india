@@ -292,6 +292,7 @@ async def scrape_gem_mp_async(keyword: str) -> list[dict]:
                 count = await locator.count()
                 for index in range(count):
                     item = locator.nth(index)
+                    direct_href = await _first_bid_href(item)
                     text = " ".join((await item.inner_text()).split())
                     if not text or text.casefold() in seen or not _is_mp_text(text):
                         continue
@@ -299,15 +300,10 @@ async def scrape_gem_mp_async(keyword: str) -> list[dict]:
 
                     extracted_bid_number = _extract_gem_bid_number(text)
                     bid_number = extracted_bid_number or f"GeM-MP-{keyword}-{index + 1}"
-                    direct_href = await _first_bid_details_href(item)
                     tender_id = (
-                        _gem_tender_id_from_url(direct_href)
+                        _gem_document_id_from_url(direct_href)
                         if direct_href
-                        else (
-                            extracted_bid_number.replace("/", "-")
-                            if extracted_bid_number
-                            else None
-                        )
+                        else extracted_bid_number
                     )
                     portal_url = (
                         urljoin("https://bidplus.gem.gov.in", direct_href)
@@ -471,17 +467,20 @@ def _scrape_document_listing(
     return tenders
 
 
-async def _first_bid_details_href(item) -> str | None:
-    links = item.locator("a[href*='bid-details']")
+async def _first_bid_href(item) -> str | None:
+    links = item.locator("a[href*='showbidDocument']")
+    if await links.count() > 0:
+        return await links.first.get_attribute("href")
+    links = item.locator("a[href]")
     if await links.count() > 0:
         return await links.first.get_attribute("href")
     return None
 
 
-def _gem_tender_id_from_url(url: str | None) -> str | None:
+def _gem_document_id_from_url(url: str | None) -> str | None:
     if not url:
         return None
-    match = re.search(r"bid-details/([^?#]+)", url)
+    match = re.search(r"showbidDocument/([^?#]+)", url)
     return match.group(1) if match else None
 
 
