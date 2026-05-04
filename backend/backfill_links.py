@@ -7,8 +7,10 @@ from sqlalchemy import and_, or_, select
 from app.database import async_session, run_startup_migrations
 from app.fetchers.deeplinks import (
     GENERIC_HOMEPAGE_URLS,
+    NIC_PORTAL_BASES,
     build_deep_link,
     classify_link,
+    has_nic_direct_sp,
     is_generic_link,
 )
 from app.models import Tender
@@ -18,6 +20,8 @@ async def backfill_bad_links() -> int:
     homepage_values = list(GENERIC_HOMEPAGE_URLS) + [
         f"{url}/" for url in GENERIC_HOMEPAGE_URLS if url
     ]
+    nic_portals = list(NIC_PORTAL_BASES)
+    tenderdekho_portals = ["TenderDekho", "Tender Dekho"]
     async with async_session() as session:
         result = await session.scalars(
             select(Tender).where(
@@ -34,6 +38,20 @@ async def backfill_bad_links() -> int:
                             Tender.portal_url.not_ilike("%bid-details%"),
                         ),
                     ),
+                    and_(
+                        Tender.portal_source.in_(nic_portals),
+                        or_(
+                            Tender.portal_url.is_(None),
+                            Tender.portal_url.not_ilike("%sp=S%"),
+                        ),
+                    ),
+                    and_(
+                        Tender.portal_source.in_(tenderdekho_portals),
+                        or_(
+                            Tender.portal_url.is_(None),
+                            Tender.portal_url.not_ilike("%/tender/%"),
+                        ),
+                    ),
                 )
             )
         )
@@ -44,7 +62,10 @@ async def backfill_bad_links() -> int:
             is_bad_gem_link = (
                 tender.portal_source == "GeM" and "bid-details" not in url
             )
-            if is_bad_gem_link or is_generic_link(url):
+            is_bad_nic_link = (
+                tender.portal_source in NIC_PORTAL_BASES and not has_nic_direct_sp(url)
+            )
+            if is_bad_gem_link or is_bad_nic_link or is_generic_link(url):
                 url = build_deep_link(
                     tender.portal_source or "",
                     tender.ref_number,

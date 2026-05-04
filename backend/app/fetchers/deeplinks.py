@@ -7,6 +7,9 @@ NIC_PORTAL_BASES: dict[str, str] = {
     "CPPP": "https://eprocure.gov.in/eprocure/app",
     "MP Tenders": "https://mptenders.gov.in/nicgep/app",
     "MP PWD": "https://mpeprocurement.gov.in/nicgep/app",
+    "UP Tenders": "https://etender.up.nic.in/nicgep/app",
+    "Maharashtra Tenders": "https://mahatenders.gov.in/nicgep/app",
+    "Rajasthan Tenders": "https://sppp.rajasthan.gov.in/app",
     "State-MP": "https://mptenders.gov.in/nicgep/app",
     "MP": "https://mptenders.gov.in/nicgep/app",
     "UP": "https://etender.up.nic.in/nicgep/app",
@@ -41,6 +44,8 @@ GENERIC_HOMEPAGE_URLS: frozenset[str] = frozenset(
         "https://bidassist.com/tenders",
         "https://www.bidassist.com",
         "https://www.bidassist.com/tenders",
+        "https://tendertiger.com",
+        "https://www.tendertiger.com",
         "https://mpbse.nic.in",
         "https://mpforest.gov.in",
         "https://mpforest.gov.in/tenders",
@@ -65,6 +70,8 @@ TENDER_IDENTIFIER_RE = re.compile(
     r"(?:[?&]sp=S[^&\s]+|bid-details|tenderRef|NIT|DirectLink)",
     flags=re.IGNORECASE,
 )
+NIC_PORTAL_HOSTS = frozenset(urlparse(base).netloc for base in NIC_PORTAL_BASES.values())
+NIC_DIRECT_SP_RE = re.compile(r"[?&]sp=S[^&\s\"']+", flags=re.IGNORECASE)
 
 
 def is_generic_link(url: str | None) -> bool:
@@ -76,11 +83,13 @@ def is_generic_link(url: str | None) -> bool:
     normalized = cleaned.rstrip("/")
     if normalized in GENERIC_HOMEPAGE_URLS:
         return True
-    if TENDER_IDENTIFIER_RE.search(cleaned):
-        return False
-
     parsed = urlparse(cleaned)
     if parsed.scheme and parsed.netloc:
+        if _is_nic_host(parsed.netloc):
+            return NIC_DIRECT_SP_RE.search(cleaned) is None
+        if TENDER_IDENTIFIER_RE.search(cleaned):
+            return False
+
         path = parsed.path.strip("/")
         query = parse_qs(parsed.query)
         if not path:
@@ -119,9 +128,9 @@ def build_deep_link(portal: str, ref_number: str, tender_id: str | None = None) 
 
     if portal_name in {"TenderDekho", "Tender Dekho"}:
         if tid:
-            return f"https://www.tenderdekho.com/tenders/{quote(tid.strip('/'))}"
+            return f"https://tenderdekho.com/tender/{quote(_last_path_part(tid))}"
         if ref:
-            return f"https://www.google.com/search?q={quote_plus(ref)}+site:tenderdekho.com"
+            return f"https://tenderdekho.com/tenders?search={quote_plus(ref)}"
 
     if portal_name in {"BidAssist", "Bid Assist"}:
         if tid:
@@ -154,6 +163,10 @@ def extract_nic_tender_id(url: str) -> str | None:
     """Extract the NIC internal tender sp= value from a portal URL."""
     m = re.search(r"[?&]sp=([^&\s]+)", url)
     return m.group(1) if m else None
+
+
+def has_nic_direct_sp(url: str | None) -> bool:
+    return NIC_DIRECT_SP_RE.search(url or "") is not None
 
 
 def classify_link(url: str, link_verified: bool) -> str:
@@ -190,7 +203,19 @@ def _is_search_fallback(url: str | None) -> bool:
         return True
     if parsed.query and "FrontEndTendersByKeyword" in parsed.query:
         return True
+    if parsed.netloc.endswith("tenderdekho.com") and parsed.path.rstrip("/") == "/tenders":
+        return True
     return False
+
+
+def _is_nic_host(netloc: str) -> bool:
+    host = netloc.casefold()
+    return any(host == nic_host or host.endswith(f".{nic_host}") for nic_host in NIC_PORTAL_HOSTS)
+
+
+def _last_path_part(value: str) -> str:
+    text = (value or "").strip().split("?", 1)[0].rstrip("/")
+    return text.rsplit("/", 1)[-1] if "/" in text else text
 
 
 def _query_contains_specific_ref(query: dict[str, list[str]]) -> bool:

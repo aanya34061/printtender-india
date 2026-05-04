@@ -110,6 +110,28 @@ def test_is_generic_link_identifies_homepage_and_direct_sp():
     )
 
 
+def test_nic_link_without_sp_s_is_generic_even_with_directlink_page():
+    assert is_generic_link(
+        "https://mptenders.gov.in/nicgep/app?component=%24DirectLink&page=FrontEndTendersByNIT&service=direct"
+    )
+
+
+def test_nic_keyword_search_is_search_fallback():
+    link = "https://mptenders.gov.in/nicgep/app?page=FrontEndTendersByKeyword&service=page&keyword=MP-PRINT-001"
+    assert is_generic_link(link)
+    assert classify_link(link, False) == "search"
+
+
+def test_tenderdekho_without_slug_uses_site_search():
+    link = build_deep_link("TenderDekho", "TD-REF-001", None)
+    assert link == "https://tenderdekho.com/tenders?search=TD-REF-001"
+
+
+def test_tenderdekho_with_slug_uses_tender_path():
+    link = build_deep_link("TenderDekho", "TD-REF-001", "some-tender-slug")
+    assert link == "https://tenderdekho.com/tender/some-tender-slug"
+
+
 def test_classify_link_google_is_search():
     assert (
         classify_link("https://www.google.com/search?q=REF123+tender", False)
