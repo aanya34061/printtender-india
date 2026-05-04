@@ -2,7 +2,7 @@ import { create } from "zustand";
 
 export const useFilterStore = create((set) => ({
   q: "printing",
-  state: null,
+  state: "Madhya Pradesh",
   portal: null,
   deadline_within_days: 30,
   min_value: null,
@@ -19,6 +19,6 @@ export const useFilterStore = create((set) => ({
   setSort: (sort) => set({ sort, page: 1 }),
   setPage: (page) => set({ page }),
   resetFilters: () =>
-    set({ q: "printing", state: null, portal: null, deadline_within_days: 30,
+    set({ q: "printing", state: "Madhya Pradesh", portal: null, deadline_within_days: 30,
           min_value: null, max_value: null, sort: "deadline_asc", page: 1 }),
 }));

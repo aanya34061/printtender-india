@@ -2,28 +2,27 @@ import { SlidersHorizontal, X } from "lucide-react";
 import { useFilterStore } from "../store/filterStore.js";
 
 const STATES = [
-  "Andhra Pradesh","Arunachal Pradesh","Assam","Bihar","Chhattisgarh","Goa","Gujarat",
-  "Haryana","Himachal Pradesh","Jharkhand","Karnataka","Kerala","Madhya Pradesh",
-  "Maharashtra","Manipur","Meghalaya","Mizoram","Nagaland","Odisha","Punjab",
-  "Rajasthan","Sikkim","Tamil Nadu","Telangana","Tripura","Uttar Pradesh",
-  "Uttarakhand","West Bengal","Delhi","Jammu & Kashmir","Ladakh","Puducherry",
-  "Chandigarh","Goa",
+  "Madhya Pradesh","Andhra Pradesh","Assam","Bihar","Chhattisgarh","Delhi","Goa","Gujarat",
+  "Haryana","Himachal Pradesh","Jharkhand","Karnataka","Kerala",
+  "Maharashtra","Odisha","Punjab","Rajasthan",
+  "Tamil Nadu","Telangana","Uttar Pradesh","Uttarakhand","West Bengal",
+  "Jammu & Kashmir","Puducherry","Chandigarh",
 ];
 
 const PORTALS = ["CPPP", "GeM", "State-MP", "State-UP", "State-MH", "State-RJ", "TenderDekho"];
 
 const DEADLINE_OPTS = [
-  { label: "Expiring today", value: 1 },
+  { label: "Today only", value: 1 },
   { label: "Within 3 days", value: 3 },
   { label: "Within 7 days", value: 7 },
   { label: "Within 30 days", value: 30 },
 ];
 
 const VALUE_OPTS = [
-  { label: "Under ₹1 Lakh", min: null, max: 100_000 },
-  { label: "₹1–10 Lakh", min: 100_000, max: 1_000_000 },
-  { label: "₹10–50 Lakh", min: 1_000_000, max: 5_000_000 },
-  { label: "₹50L–1 Cr", min: 5_000_000, max: 10_000_000 },
+  { label: "Under ₹1 L", min: null, max: 100_000 },
+  { label: "₹1–10 L", min: 100_000, max: 1_000_000 },
+  { label: "₹10–50 L", min: 1_000_000, max: 5_000_000 },
+  { label: "₹50 L–1 Cr", min: 5_000_000, max: 10_000_000 },
   { label: "Above ₹1 Cr", min: 10_000_000, max: null },
 ];
 
@@ -33,40 +32,46 @@ export default function FilterRow() {
     setState, setPortal, setDeadlineDays, setValueRange, resetFilters,
   } = useFilterStore();
 
-  const activeCount = [state, portal].filter(Boolean).length
-    + (deadline_within_days !== 30 ? 1 : 0)
-    + (min_value !== null || max_value !== null ? 1 : 0);
+  const activeCount =
+    [state, portal].filter(Boolean).length +
+    (deadline_within_days !== 30 ? 1 : 0) +
+    (min_value !== null || max_value !== null ? 1 : 0);
 
   return (
-    <div className="border-b border-white/5 bg-surface/60 backdrop-blur-sm">
-      <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-2 px-4 py-3 sm:px-6">
-        <SlidersHorizontal className="h-4 w-4 shrink-0 text-slate-500" />
+    <div
+      id="filter-row"
+      style={{ borderBottom: "1px solid rgba(255,255,255,0.06)", background: "#1a1f35" }}
+    >
+      <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-3 px-6 pb-2 pt-3 sm:px-10">
+        <SlidersHorizontal className="h-4 w-4 shrink-0" style={{ color: "var(--muted)" }} />
 
-        <Select
+        <FilterSelect
           value={state ?? ""}
           onChange={(v) => setState(v || null)}
           placeholder="All States"
         >
           {STATES.map((s) => <option key={s} value={s}>{s}</option>)}
-        </Select>
+        </FilterSelect>
 
-        <Select
+        <FilterSelect
           value={portal ?? ""}
           onChange={(v) => setPortal(v || null)}
           placeholder="All Portals"
         >
           {PORTALS.map((p) => <option key={p} value={p}>{p}</option>)}
-        </Select>
+        </FilterSelect>
 
-        <Select
+        <FilterSelect
           value={deadline_within_days !== 30 ? String(deadline_within_days) : ""}
           onChange={(v) => setDeadlineDays(v ? Number(v) : 30)}
           placeholder="Any Deadline"
         >
-          {DEADLINE_OPTS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-        </Select>
+          {DEADLINE_OPTS.map((o) => (
+            <option key={o.value} value={o.value}>{o.label}</option>
+          ))}
+        </FilterSelect>
 
-        <Select
+        <FilterSelect
           value={min_value !== null || max_value !== null ? `${min_value ?? ""}:${max_value ?? ""}` : ""}
           onChange={(v) => {
             if (!v) { setValueRange(null, null); return; }
@@ -78,35 +83,43 @@ export default function FilterRow() {
           {VALUE_OPTS.map((o) => (
             <option key={o.label} value={`${o.min ?? ""}:${o.max ?? ""}`}>{o.label}</option>
           ))}
-        </Select>
+        </FilterSelect>
 
         {activeCount > 0 && (
-          <button
-            type="button"
-            onClick={resetFilters}
-            className="flex items-center gap-1.5 rounded-full bg-accent/10 px-3 py-1.5 text-xs font-semibold text-accent transition hover:bg-accent/20"
-          >
-            <X className="h-3 w-3" />
-            Clear All ({activeCount})
-          </button>
+          <div className="flex items-center gap-2">
+            <span
+              className="rounded-full px-2 py-0.5 text-xs font-semibold text-white"
+              style={{ background: "var(--accent)" }}
+            >
+              {activeCount}
+            </span>
+            <button
+              type="button"
+              onClick={resetFilters}
+              className="flex items-center gap-1 text-sm"
+              style={{ color: "var(--accent)", textDecoration: "underline", background: "none", border: "none", cursor: "pointer" }}
+            >
+              <X className="h-3 w-3" /> Clear All
+            </button>
+          </div>
         )}
       </div>
+      <p className="mx-auto max-w-6xl px-6 pb-3 text-xs sm:px-10" style={{ color: "var(--muted)" }}>
+        Covering: MP Tenders · MP PWD · MPBSE · GeM MP · CPPP MP · MP Forest · MP Info.
+      </p>
     </div>
   );
 }
 
-function Select({ value, onChange, placeholder, children }) {
+function FilterSelect({ value, onChange, placeholder, children }) {
   return (
-    <div className="relative">
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="select-field h-9 rounded-full px-3 pr-8 text-xs font-medium"
-      >
-        <option value="">{placeholder}</option>
-        {children}
-      </select>
-      <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 text-xs">▾</span>
-    </div>
+    <select
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      className="form-select min-w-[140px] text-sm"
+    >
+      <option value="">{placeholder}</option>
+      {children}
+    </select>
   );
 }
