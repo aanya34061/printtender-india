@@ -1,8 +1,14 @@
 import xml.etree.ElementTree as ET
+import re
 
 import httpx
 
 from app.fetchers.base import BaseFetcher, REQUEST_HEADERS
+from app.fetchers.deeplinks import (
+    build_deep_link,
+    extract_nic_tender_id,
+    is_generic_homepage_url,
+)
 
 
 class CPPPFetcher(BaseFetcher):
@@ -56,6 +62,33 @@ class CPPPFetcher(BaseFetcher):
             if not title and not ref_number:
                 continue
 
+            # Extract the direct tender URL from the XML field
+            raw_url = (
+                fields.get("TenderUrl")
+                or fields.get("TenderURL")
+                or fields.get("Url")
+                or ""
+            ).strip()
+
+            # Extract internal NIC tender ID from the URL (sp=SXXXXXXXX)
+            tender_id = (
+                extract_nic_tender_id(raw_url)
+                or fields.get("NitId")
+                or fields.get("TenderId")
+            )
+
+            # Use the XML URL only if it's a real deep link
+            if (
+                raw_url
+                and "eprocure.gov.in" in raw_url
+                and not is_generic_homepage_url(raw_url)
+            ):
+                portal_url = raw_url
+                link_verified = True
+            else:
+                portal_url = build_deep_link(self.portal_source, ref_number, tender_id)
+                link_verified = False
+
             tenders.append(
                 self.build_record(
                     ref_number=ref_number,
@@ -65,8 +98,10 @@ class CPPPFetcher(BaseFetcher):
                     portal_source=self.portal_source,
                     deadline_raw=fields.get("BidEndDate"),
                     value_raw=fields.get("TenderValue"),
-                    portal_url=fields.get("TenderUrl"),
+                    portal_url=portal_url,
                     keyword_hit=keyword,
+                    tender_id=tender_id,
+                    link_verified=link_verified,
                 )
             )
         return tenders
@@ -74,6 +109,75 @@ class CPPPFetcher(BaseFetcher):
     @staticmethod
     def _tag_name(tag: str) -> str:
         return tag.rsplit("}", 1)[-1]
+
+
+MP_FILTER_TERMS = (
+    "madhya pradesh",
+    "m.p.",
+    "bhopal",
+    "indore",
+    "jabalpur",
+    "gwalior",
+)
+
+
+def scrape_cppp_mp(keyword: str) -> list[dict]:
+    """Fetch CPPP tenders constrained to Madhya Pradesh and printing keywords."""
+    fetcher = CPPPFetcher()
+    param_sets = [
+        {
+            "page": "FrontEndTendersByKeyword",
+            "service": "page",
+            "keyword": keyword,
+            "searchBy": "0",
+            "searchDateType": "TD",
+            "state": "Madhya Pradesh",
+            "statecode": "23",
+        },
+        {
+            "page": "FrontEndTendersByKeyword",
+            "service": "page",
+            "keyword": keyword,
+            "searchBy": "0",
+            "searchDateType": "TD",
+            "state": "MP",
+        },
+    ]
+    tenders: list[dict] = []
+    seen: set[str] = set()
+    for params in param_sets:
+        try:
+            fetcher.wait_between_requests()
+            with httpx.Client(
+                timeout=30, follow_redirects=True, headers=REQUEST_HEADERS
+            ) as client:
+                response = client.get(fetcher.url, params=params)
+                response.raise_for_status()
+            for tender in fetcher.parse_xml(response.text, keyword):
+                if not _is_madhya_pradesh_cppp_record(tender):
+                    continue
+                ref_number = tender.get("ref_number", "").strip().casefold()
+                if not ref_number or ref_number in seen:
+                    continue
+                seen.add(ref_number)
+                tender["state"] = "Madhya Pradesh"
+                tender["portal_source"] = "CPPP"
+                tenders.append(tender)
+        except Exception as exc:
+            fetcher.log_result("CPPP MP", keyword, 0, 0, "error", str(exc))
+    fetcher.log_result("CPPP MP", keyword, len(tenders), len(tenders), "success")
+    return tenders
+
+
+def _is_madhya_pradesh_cppp_record(tender: dict) -> bool:
+    text = " ".join(
+        str(tender.get(key) or "")
+        for key in ("state", "organisation", "title", "ref_number")
+    )
+    normalized = f" {text.casefold()} "
+    if any(term in normalized for term in MP_FILTER_TERMS):
+        return True
+    return re.search(r"\bMP\b", text, flags=re.IGNORECASE) is not None
 
 
 def main() -> None:
