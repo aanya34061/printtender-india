@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import case, distinct, func, select
+from sqlalchemy import distinct, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -20,12 +20,16 @@ async def get_stats(session: AsyncSession = Depends(get_db)) -> dict:
     total_active = (
         await session.scalar(
             select(func.count()).select_from(Tender).where(Tender.is_active.is_(True))
-        ) or 0
+        )
+        or 0
     )
     total_today = (
         await session.scalar(
-            select(func.count()).select_from(Tender).where(Tender.fetched_at >= today_start)
-        ) or 0
+            select(func.count())
+            .select_from(Tender)
+            .where(Tender.fetched_at >= today_start)
+        )
+        or 0
     )
     expiring_7_days = (
         await session.scalar(
@@ -34,7 +38,8 @@ async def get_stats(session: AsyncSession = Depends(get_db)) -> dict:
             .where(Tender.is_active.is_(True))
             .where(Tender.bid_end_date > now)
             .where(Tender.bid_end_date <= seven_days)
-        ) or 0
+        )
+        or 0
     )
     new_since_yesterday = (
         await session.scalar(
@@ -42,14 +47,16 @@ async def get_stats(session: AsyncSession = Depends(get_db)) -> dict:
             .select_from(Tender)
             .where(Tender.fetched_at >= yesterday_start)
             .where(Tender.fetched_at < today_start)
-        ) or 0
+        )
+        or 0
     )
     states_covered = (
         await session.scalar(
             select(func.count(distinct(Tender.state)))
             .where(Tender.is_active.is_(True))
             .where(Tender.state.is_not(None))
-        ) or 0
+        )
+        or 0
     )
     last_fetch = await session.scalar(select(func.max(FetchLog.fetched_at)))
 
@@ -98,11 +105,17 @@ async def portal_status(session: AsyncSession = Depends(get_db)) -> list[dict]:
     rows = await session.execute(
         select(FetchLog).join(
             subq,
-            (FetchLog.portal == subq.c.portal) & (FetchLog.fetched_at == subq.c.max_fetched),
+            (FetchLog.portal == subq.c.portal)
+            & (FetchLog.fetched_at == subq.c.max_fetched),
         )
     )
     logs = rows.scalars().all()
     return [
-        {"portal": log.portal, "last_fetch": log.fetched_at, "status": log.status, "tenders_found": log.tenders_found}
+        {
+            "portal": log.portal,
+            "last_fetch": log.fetched_at,
+            "status": log.status,
+            "tenders_found": log.tenders_found,
+        }
         for log in logs
     ]

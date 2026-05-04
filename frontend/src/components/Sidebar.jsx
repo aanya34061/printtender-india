@@ -4,6 +4,7 @@ import { differenceInDays, parseISO } from "date-fns";
 import { Bookmark } from "lucide-react";
 import { Cell, Pie, PieChart, Tooltip } from "recharts";
 import { useStats } from "../hooks/useStats.js";
+import { useFilterStore } from "../store/filterStore.js";
 
 const BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
 const COLORS = { CPPP: "#3b82f6", GeM: "#22c55e", State: "#a855f7", Other: "#64748b" };
@@ -21,9 +22,22 @@ function useExpiringSoon() {
   });
 }
 
-export default function Sidebar({ bookmarks, onView, onViewTender }) {
+function SideCard({ title, children }) {
+  return (
+    <div
+      className="rounded-[12px] p-4"
+      style={{ background: "var(--surface)", border: "1px solid rgba(255,255,255,0.08)" }}
+    >
+      <h3 className="mb-3 text-sm font-semibold text-slate-300">{title}</h3>
+      {children}
+    </div>
+  );
+}
+
+export default function Sidebar({ bookmarks, onView }) {
   const { data: stats } = useStats();
   const { data: expiring = [] } = useExpiringSoon();
+  const { setPortal, setQ } = useFilterStore();
 
   const portalData = stats?.by_portal
     ? Object.entries(stats.by_portal)
@@ -35,56 +49,68 @@ export default function Sidebar({ bookmarks, onView, onViewTender }) {
     <div className="space-y-4 lg:w-64 xl:w-72">
       {/* Portal distribution */}
       {portalData.length > 0 && (
-        <div className="card p-4">
-          <h3 className="mb-3 text-sm font-semibold text-slate-300">Tenders by Portal</h3>
+        <SideCard title="Tenders by Portal">
           <PieChart width={200} height={160} className="mx-auto">
-            <Pie data={portalData} cx={100} cy={75} innerRadius={42} outerRadius={62}
-              paddingAngle={2} dataKey="value">
+            <Pie data={portalData} cx={100} cy={75} innerRadius={42} outerRadius={62} paddingAngle={2} dataKey="value">
               {portalData.map((entry) => (
                 <Cell key={entry.name} fill={COLORS[entry.name] ?? "#64748b"} />
               ))}
             </Pie>
             <Tooltip
-              contentStyle={{ background: "#1e2235", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 8 }}
+              contentStyle={{
+                background: "#222840",
+                border: "1px solid rgba(255,255,255,0.08)",
+                borderRadius: 8,
+                fontSize: 12,
+              }}
               labelStyle={{ color: "#e2e8f0" }}
               itemStyle={{ color: "#94a3b8" }}
             />
           </PieChart>
-          <div className="mt-2 space-y-1">
+          <div className="mt-2 space-y-1.5">
             {portalData.map((d) => (
-              <div key={d.name} className="flex items-center justify-between text-xs">
+              <button
+                key={d.name}
+                type="button"
+                onClick={() => { setPortal(d.name.startsWith("State") ? null : d.name); setQ("printing"); }}
+                className="flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-xs transition"
+                style={{ color: "var(--muted)" }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(249,115,22,0.08)"; e.currentTarget.style.color = "var(--accent)"; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "var(--muted)"; }}
+                title={`Show ${d.name} tenders`}
+              >
                 <span className="flex items-center gap-1.5">
-                  <span className="h-2 w-2 rounded-full" style={{ background: COLORS[d.name] }} />
-                  <span className="text-slate-400">{d.name}</span>
+                  <span className="h-2 w-2 rounded-full" style={{ background: COLORS[d.name] ?? "#64748b" }} />
+                  {d.name}
                 </span>
-                <span className="font-semibold text-slate-300">{d.value}</span>
-              </div>
+                <span className="font-semibold" style={{ color: COLORS[d.name] ?? "#64748b" }}>{d.value} →</span>
+              </button>
             ))}
           </div>
-        </div>
+        </SideCard>
       )}
 
       {/* Expiring soon */}
       {expiring.length > 0 && (
-        <div className="card p-4">
-          <h3 className="mb-3 text-sm font-semibold text-slate-300">⏰ Expiring Soon</h3>
-          <ul className="space-y-2.5">
+        <SideCard title="⏰ Expiring Soon">
+          <ul className="space-y-3">
             {expiring.map((t) => {
-              const days = t.bid_end_date
-                ? differenceInDays(parseISO(t.bid_end_date), new Date())
-                : null;
+              const days = t.bid_end_date ? differenceInDays(parseISO(t.bid_end_date), new Date()) : null;
               return (
                 <li key={t.id}>
-                  <button
-                    type="button"
-                    onClick={() => onView(t)}
-                    className="w-full text-left"
-                  >
-                    <p className="line-clamp-2 text-xs font-medium text-slate-300 hover:text-accent">
+                  <button type="button" onClick={() => onView(t)} className="w-full text-left">
+                    <p
+                      className="line-clamp-2 text-xs font-medium text-slate-300 transition"
+                      onMouseEnter={(e) => e.currentTarget.style.color = "var(--accent)"}
+                      onMouseLeave={(e) => e.currentTarget.style.color = ""}
+                    >
                       {t.title}
                     </p>
                     {days !== null && (
-                      <p className={`mt-0.5 text-xs ${days <= 1 ? "text-danger" : "text-warning"}`}>
+                      <p
+                        className="mt-0.5 text-xs font-semibold"
+                        style={{ color: days <= 1 ? "var(--red)" : "var(--amber)" }}
+                      >
                         {days === 0 ? "Closes today" : `${days}d left`}
                       </p>
                     )}
@@ -93,30 +119,33 @@ export default function Sidebar({ bookmarks, onView, onViewTender }) {
               );
             })}
           </ul>
-        </div>
+        </SideCard>
       )}
 
       {/* Bookmarks */}
       {bookmarks.length > 0 && (
-        <div className="card p-4">
-          <h3 className="mb-3 flex items-center gap-1.5 text-sm font-semibold text-slate-300">
-            <Bookmark className="h-4 w-4 text-accent" />
-            Bookmarked ({bookmarks.length})
-          </h3>
+        <SideCard title="">
+          <div className="mb-3 flex items-center gap-1.5">
+            <Bookmark className="h-4 w-4" style={{ color: "var(--accent)" }} />
+            <h3 className="text-sm font-semibold text-slate-300">Bookmarked ({bookmarks.length})</h3>
+          </div>
           <ul className="space-y-2.5">
             {bookmarks.slice(0, 5).map((t) => (
               <li key={t.id}>
                 <button
                   type="button"
                   onClick={() => onView(t)}
-                  className="w-full text-left text-xs font-medium text-slate-400 hover:text-accent line-clamp-2"
+                  className="line-clamp-2 w-full text-left text-xs font-medium transition"
+                  style={{ color: "var(--muted)" }}
+                  onMouseEnter={(e) => e.currentTarget.style.color = "var(--accent)"}
+                  onMouseLeave={(e) => e.currentTarget.style.color = "var(--muted)"}
                 >
                   {t.title}
                 </button>
               </li>
             ))}
           </ul>
-        </div>
+        </SideCard>
       )}
     </div>
   );

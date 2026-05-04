@@ -1,3 +1,4 @@
+import re
 from dataclasses import dataclass
 from urllib.parse import urljoin
 
@@ -5,6 +6,7 @@ import httpx
 from bs4 import BeautifulSoup
 
 from app.fetchers.base import BaseFetcher, REQUEST_HEADERS
+from app.fetchers.deeplinks import build_deep_link, extract_nic_tender_id
 
 
 STATE_PORTALS = {
@@ -47,10 +49,12 @@ class StateFetcher(BaseFetcher):
             "searchBy": "0",
             "searchDateType": "TD",
         }
+        # Some state portals (e.g. Rajasthan) have self-signed SSL certs
+        verify_ssl = state_code != "RJ"
         try:
             self.wait_between_requests()
             with httpx.Client(
-                timeout=30, follow_redirects=True, headers=REQUEST_HEADERS
+                timeout=30, follow_redirects=True, headers=REQUEST_HEADERS, verify=verify_ssl
             ) as client:
                 response = client.get(portal_url, params=params)
                 response.raise_for_status()
@@ -90,10 +94,31 @@ class StateFetcher(BaseFetcher):
             organisation = columns[3].get_text(" ", strip=True)
             deadline = columns[4].get_text(" ", strip=True)
             value = columns[5].get_text(" ", strip=True)
-            link = row.find("a", href=True)
 
             if not ref_number and not title:
                 continue
+
+            portal_source = f"State-{state_code}"
+
+            # Prefer a direct NIT/view link over generic links
+            nit_tag = row.find("a", href=re.compile(r"FrontEndTendersByNIT|FrontEndViewTender|DirectLink|tenderRef"))
+            if nit_tag:
+                href = nit_tag.get("href", "")
+                portal_url = urljoin(base_url, href) if not href.startswith("http") else href
+                tender_id = extract_nic_tender_id(portal_url)
+                link_verified = True
+            else:
+                # Fallback: any <a> in the row
+                any_link = row.find("a", href=True)
+                if any_link:
+                    href = any_link["href"]
+                    portal_url = urljoin(base_url, href) if not href.startswith("http") else href
+                    tender_id = extract_nic_tender_id(portal_url)
+                    link_verified = bool(tender_id)
+                else:
+                    tender_id = None
+                    portal_url = build_deep_link(portal_source, ref_number, None)
+                    link_verified = False
 
             tenders.append(
                 self.build_record(
@@ -101,11 +126,13 @@ class StateFetcher(BaseFetcher):
                     title=title,
                     organisation=organisation,
                     state=STATE_NAMES.get(state_code, state_code),
-                    portal_source=f"State-{state_code}",
+                    portal_source=portal_source,
                     deadline_raw=deadline,
                     value_raw=value,
-                    portal_url=urljoin(base_url, link["href"]) if link else base_url,
+                    portal_url=portal_url,
                     keyword_hit=keyword,
+                    tender_id=tender_id,
+                    link_verified=link_verified,
                 )
             )
         return tenders
