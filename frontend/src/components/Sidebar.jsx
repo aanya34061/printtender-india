@@ -65,9 +65,7 @@ export default function Sidebar({ bookmarks, onView }) {
   const { setPortal, setQ } = useFilterStore();
 
   const portalData = stats?.by_portal
-    ? Object.entries(stats.by_portal)
-        .filter(([, v]) => v > 0)
-        .map(([name, value]) => ({ name, value }))
+    ? Object.entries(stats.by_portal).map(([name, value]) => ({ name, value }))
     : [];
 
   return (

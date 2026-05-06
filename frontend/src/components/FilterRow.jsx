@@ -36,9 +36,30 @@ export default function FilterRow() {
 
   const { data: stats } = useStats();
   // derive portal list dynamically from stats.by_portal when possible
-  const portalOptions = stats && stats.by_portal
-    ? Object.keys(stats.by_portal).sort()
-    : ["CPPP", "GeM", "State-MP", "State-UP", "State-MH", "State-RJ", "TenderDekho"];
+  const KNOWN_NEWSPAPERS = [
+    "TOI Tenders",
+    "HT Tenders",
+    "ET Tenders",
+    "The Hindu Tenders",
+    "Dainik Bhaskar",
+    "Patrika",
+    "Nai Dunia",
+    "Navbharat",
+    "Dainik Jagran",
+    "Amar Ujala",
+    "Tender Notice India",
+    "India Tender Notice",
+    "Public Notice India",
+  ];
+
+  const portalOptions = (() => {
+    if (stats && stats.by_portal) {
+      const keys = Object.keys(stats.by_portal);
+      const merged = Array.from(new Set([...keys, ...KNOWN_NEWSPAPERS]));
+      return merged.sort();
+    }
+    return ["CPPP", "GeM", "State-MP", "State-UP", "State-MH", "State-RJ", "TenderDekho", ...KNOWN_NEWSPAPERS].sort();
+  })();
 
   const activeCount =
     [state, portal].filter(Boolean).length +
