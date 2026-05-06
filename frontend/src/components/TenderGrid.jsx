@@ -18,9 +18,17 @@ const container = {
 };
 
 export default function TenderGrid({ data, isLoading, isError, onView, onBookmark, isBookmarked }) {
-  const { q, sort, page, setSort, setPage } = useFilterStore();
+  const { q, sort, page, setSort, setPage, categories } = useFilterStore();
   const tenders = data?.tenders ?? [];
-  const total = data?.total ?? 0;
+  // Debug: show all tenders before client-side filtering
+  try { console.debug && console.debug('allTenders', tenders); } catch (e) {}
+  // Apply multi-category client-side filtering (OR semantics)
+  const selectedCategories = categories || [];
+  const displayTenders = (selectedCategories.length === 0)
+    ? tenders
+    : tenders.filter((t) => selectedCategories.some((cat) => (t.category || '').toLowerCase().includes(cat.toLowerCase())));
+  const total = displayTenders.length ?? 0;
+  // Keep server-side pagination info for controls
   const totalPages = data?.pages ?? 1;
 
   return (
@@ -72,12 +80,12 @@ export default function TenderGrid({ data, isLoading, isError, onView, onBookmar
       )}
 
       {/* Empty state */}
-      {!isLoading && !isError && tenders.length === 0 && (
+      {!isLoading && !isError && displayTenders.length === 0 && (
         <EmptyState query={q} />
       )}
 
       {/* Cards grid */}
-      {!isLoading && !isError && tenders.length > 0 && (
+      {!isLoading && !isError && displayTenders.length > 0 && (
         <AnimatePresence mode="wait">
           <motion.div
             key={`${q}-${page}-${sort}`}
@@ -86,7 +94,7 @@ export default function TenderGrid({ data, isLoading, isError, onView, onBookmar
             animate="show"
             className="grid gap-4 sm:grid-cols-2"
           >
-            {tenders.map((t) => (
+            {displayTenders.map((t) => (
               <TenderCard
                 key={t.id}
                 tender={t}

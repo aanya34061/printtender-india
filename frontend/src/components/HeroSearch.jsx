@@ -36,7 +36,7 @@ const KEYWORD_GROUPS = [
 ];
 
 export default function HeroSearch() {
-  const { q, setQ } = useFilterStore();
+  const { q, setQ, categories, toggleCategory } = useFilterStore();
   const [inputVal, setInputVal] = useState(q);
   const [open, setOpen] = useState(false);
   const timer = useRef(null);
@@ -63,6 +63,8 @@ export default function HeroSearch() {
   }
 
   function handleChip(kw) {
+    // Toggle category selection while preserving existing search behaviour
+    toggleCategory(kw);
     setInputVal(kw);
     clearTimeout(timer.current);
     setQ(kw);
@@ -149,7 +151,7 @@ export default function HeroSearch() {
                 </p>
                 <div className="flex flex-wrap gap-1.5 px-4 pb-3">
                   {group.keywords.map((kw) => {
-                    const isActive = activeKw === kw.toLowerCase();
+                    const isActive = (categories || []).includes(kw);
                     return (
                       <button
                         key={kw}
