@@ -189,6 +189,7 @@
   .badge-tenderdekho { background: rgba(20,184,166,0.15); color: #14b8a6; border: 1px solid rgba(20,184,166,0.3); }
   .badge-bidassist { background: rgba(234,179,8,0.15); color: #eab308; border: 1px solid rgba(234,179,8,0.3); }
   .badge-other { background: rgba(100,116,139,0.15); color: #64748b; border: 1px solid rgba(100,116,139,0.3); }
+  .badge-newspaper { background: rgba(239,68,68,0.12); color: #ef4444; border: 1px solid rgba(239,68,68,0.22); }
 
   /* Group label for chip sections */
   .chip-group-label {

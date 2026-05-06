@@ -70,6 +70,29 @@ async def get_stats(session: AsyncSession = Depends(get_db)) -> dict:
         label = source or "Unknown"
         by_portal[label] = cnt
 
+    # Categorise sources into portal/newspaper for stats without DB schema changes
+    NEWSPAPER_PORTALS = {
+        "TOI Tenders",
+        "HT Tenders",
+        "ET Tenders",
+        "The Hindu Tenders",
+        "Dainik Bhaskar",
+        "Patrika",
+        "Nai Dunia",
+        "Navbharat",
+        "Dainik Jagran",
+        "Amar Ujala",
+        "Tender Notice India",
+        "India Tender Notice",
+        "Public Notice India",
+    }
+    by_source_category = {"portal": 0, "newspaper": 0}
+    for src, cnt in by_portal.items():
+        if src in NEWSPAPER_PORTALS:
+            by_source_category["newspaper"] += cnt
+        else:
+            by_source_category["portal"] += cnt
+
     alert_rows = await session.scalars(
         select(AlertSubscription.keywords).where(AlertSubscription.is_active.is_(True))
     )
@@ -82,6 +105,7 @@ async def get_stats(session: AsyncSession = Depends(get_db)) -> dict:
         "new_since_yesterday": new_since_yesterday,
         "states_covered": states_covered,
         "by_portal": by_portal,
+        "by_source_category": by_source_category,
         "last_fetch": last_fetch,
         "portals_count": len(by_portal),
         "keywords_tracked": keywords_tracked,

@@ -16,6 +16,22 @@ function portalBadgeClass(src) {
   if (src === "TenderTiger") return "badge badge-tendertiger";
   if (src === "TenderDekho") return "badge badge-tenderdekho";
   if (src === "BidAssist") return "badge badge-bidassist";
+  // Newspaper sources (red badge)
+  if ([
+    "TOI Tenders",
+    "HT Tenders",
+    "ET Tenders",
+    "The Hindu Tenders",
+    "Dainik Bhaskar",
+    "Patrika",
+    "Nai Dunia",
+    "Navbharat",
+    "Dainik Jagran",
+    "Amar Ujala",
+    "Tender Notice India",
+    "India Tender Notice",
+    "Public Notice India",
+  ].includes(src)) return "badge badge-newspaper";
   return "badge badge-other";
 }
 
@@ -188,13 +204,14 @@ export default function TenderCard({ tender, onView, isBookmarked, onBookmark })
           className="flex items-center gap-1 rounded-lg px-3 py-1.5 text-xs font-medium transition hover:opacity-90"
           style={LINK_STYLES[linkType] || LINK_STYLES.deep}
           title={
+            linkType === "newspaper" ? "This notice was published in a newspaper and may require contacting the organisation directly to apply." :
             linkType === "direct" ? `Open on ${portal}` :
             linkType === "deep"   ? `Deep link to ${portal}` :
             "Exact link unavailable — will search by ref number"
           }
         >
           {linkType === "search" ? <Search className="h-3 w-3" /> : linkType === "deep" ? <Link className="h-3 w-3" /> : <ExternalLink className="h-3 w-3" />}
-          View and Apply
+          {linkType === "newspaper" ? "Read Notice" : "View and Apply"}
         </button>
       </div>
     </motion.article>

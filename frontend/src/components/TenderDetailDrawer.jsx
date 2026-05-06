@@ -16,6 +16,21 @@ function portalBadgeClass(src) {
   if (src === "TenderTiger") return "badge badge-tendertiger";
   if (src === "TenderDekho") return "badge badge-tenderdekho";
   if (src === "BidAssist") return "badge badge-bidassist";
+  if ([
+    "TOI Tenders",
+    "HT Tenders",
+    "ET Tenders",
+    "The Hindu Tenders",
+    "Dainik Bhaskar",
+    "Patrika",
+    "Nai Dunia",
+    "Navbharat",
+    "Dainik Jagran",
+    "Amar Ujala",
+    "Tender Notice India",
+    "India Tender Notice",
+    "Public Notice India",
+  ].includes(src)) return "badge badge-newspaper";
   return "badge badge-other";
 }
 
@@ -200,9 +215,12 @@ export default function TenderDetailDrawer({ tenderId, onClose, onSetAlert }) {
                         ? { opacity: 0.75, border: "1.5px solid var(--muted)", background: "transparent", color: "var(--muted)" }
                         : {}
                     }
+                    title={tender.link_type === "newspaper" ? "This notice was published in a newspaper and may require contacting the organisation directly to apply." : undefined}
                   >
                     {tender.link_type === "search"
                       ? "🔍 Search by Ref No"
+                      : tender.link_type === "newspaper"
+                      ? "Read Notice"
                       : tender.link_type === "deep" && tender.portal_source === "GeM"
                       ? "🔍 Search on GeM (click result to open)"
                       : "View Official Tender"}

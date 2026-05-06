@@ -151,6 +151,61 @@ async def run_fetch_cycle() -> int:
         except Exception as exc:
             await _log_fetch("GeM MP", 0, "error", str(exc))
 
+    # Newspaper scrapers (text-based) — run with the same keywords used for MP portals
+    from app.fetchers.newspapers import (
+        scrape_toi,
+        scrape_ht,
+        scrape_et,
+        scrape_thehindu,
+        scrape_bhaskar,
+        scrape_patrika,
+        scrape_naidunia,
+        scrape_navbharat,
+        scrape_jagran,
+        scrape_amarujala,
+        scrape_tendernotice,
+        scrape_indiatendernotice,
+        scrape_publicnotice,
+    )
+
+    newspaper_scrapers = [
+        ("TOI Tenders", scrape_toi),
+        ("HT Tenders", scrape_ht),
+        ("ET Tenders", scrape_et),
+        ("The Hindu Tenders", scrape_thehindu),
+        ("Dainik Bhaskar", scrape_bhaskar),
+        ("Patrika", scrape_patrika),
+        ("Nai Dunia", scrape_naidunia),
+        ("Navbharat", scrape_navbharat),
+        ("Dainik Jagran", scrape_jagran),
+        ("Amar Ujala", scrape_amarujala),
+        ("Tender Notice India", scrape_tendernotice),
+        ("India Tender Notice", scrape_indiatendernotice),
+        ("Public Notice India", scrape_publicnotice),
+    ]
+
+    for keyword in MP_PRINT_KEYWORDS:
+        for label, scraper in newspaper_scrapers:
+            portal_label, raw, err = _fetch_by_source(label, lambda s=scraper, k=keyword: s(k))
+            all_raw.extend(raw)
+            await _log_fetch(portal_label, len(raw), "ok" if err is None else "error", err)
+
+    # Run OCR-based epaper scraping once daily at 08:00 UTC+5:30 (approx local 8 AM); optional
+    try:
+        from app.fetchers.epaper_ocr import scrape_epapers_for_mp
+        now = datetime.now(timezone.utc)
+        # crude local 8 AM check (server tz may vary) — only attempt when hour==2 (UTC) which is 7:30 IST
+        if now.hour == 2:
+            try:
+                ocr_raw = scrape_epapers_for_mp("printing")
+                all_raw.extend(ocr_raw)
+                await _log_fetch("Epaper OCR", len(ocr_raw), "ok")
+            except Exception as exc:
+                await _log_fetch("Epaper OCR", 0, "error", str(exc))
+    except Exception:
+        # OCR module optional — ignore if not present
+        pass
+
     aggregator_scrapers = [
         ("TenderTiger", scrape_tendertiger),
         ("TenderDekho", scrape_tenderdekho),
