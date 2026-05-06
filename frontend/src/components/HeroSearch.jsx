@@ -105,6 +105,24 @@ export default function HeroSearch() {
         />
       </div>
 
+      {/* Selected categories chips (visible when one or more selected) */}
+      {(categories || []).length > 0 && (
+        <div className="mb-3 flex flex-wrap gap-2 px-1">
+          {(categories || []).map((cat) => (
+            <button
+              key={cat}
+              type="button"
+              onClick={(e) => { e.stopPropagation(); toggleCategory(cat); }}
+              className={`chip ${ (categories || []).includes(cat) ? "chip-active" : "" }`}
+              title={`Remove ${cat}`}
+            >
+              <span style={{ marginRight: 8 }}>{cat}</span>
+              <span style={{ opacity: 0.9 }}>×</span>
+            </button>
+          ))}
+        </div>
+      )}
+
       {/* Browse keywords dropdown */}
       <div className="relative" ref={dropdownRef}>
         <button
