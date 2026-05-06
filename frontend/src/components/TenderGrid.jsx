@@ -20,8 +20,12 @@ const container = {
 export default function TenderGrid({ data, isLoading, isError, onView, onBookmark, isBookmarked }) {
   const { q, sort, page, setSort, setPage, categories } = useFilterStore();
   const tenders = data?.tenders ?? [];
-  // Debug: show all tenders before client-side filtering
-  try { console.debug && console.debug('allTenders', tenders); } catch (e) {}
+  // Debug: show all tenders before client-side filtering (log portals)
+  try { 
+    const portals = Array.from(new Set(tenders.map((t) => t.portal_source || t.portal || 'Unknown')));
+    console.log && console.log('ALL DATA:', portals);
+    console.debug && console.debug('allTenders', tenders);
+  } catch (e) {}
   // Apply multi-category client-side filtering (OR semantics)
   const selectedCategories = categories || [];
   const displayTenders = (selectedCategories.length === 0)
