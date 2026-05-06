@@ -15,6 +15,22 @@ function portalColor(name) {
   if (name === "TenderTiger") return "#a855f7";
   if (name === "TenderDekho") return "#14b8a6";
   if (name === "BidAssist") return "#eab308";
+  // Newspaper sources - use red
+  if ([
+    "TOI Tenders",
+    "HT Tenders",
+    "ET Tenders",
+    "The Hindu Tenders",
+    "Dainik Bhaskar",
+    "Patrika",
+    "Nai Dunia",
+    "Navbharat",
+    "Dainik Jagran",
+    "Amar Ujala",
+    "Tender Notice India",
+    "India Tender Notice",
+    "Public Notice India",
+  ].includes(name)) return "#ef4444";
   return "#64748b";
 }
 

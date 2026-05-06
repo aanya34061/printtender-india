@@ -9,7 +9,7 @@ const STATES = [
   "Jammu & Kashmir","Puducherry","Chandigarh",
 ];
 
-const PORTALS = ["CPPP", "GeM", "State-MP", "State-UP", "State-MH", "State-RJ", "TenderDekho"];
+// PORTALS list removed — derive dynamically from backend stats when available
 
 const DEADLINE_OPTS = [
   { label: "Today only", value: 1 },
@@ -26,11 +26,19 @@ const VALUE_OPTS = [
   { label: "Above ₹1 Cr", min: 10_000_000, max: null },
 ];
 
+import { useStats } from "../hooks/useStats.js";
+
 export default function FilterRow() {
   const {
     state, portal, deadline_within_days, min_value, max_value,
     setState, setPortal, setDeadlineDays, setValueRange, resetFilters,
   } = useFilterStore();
+
+  const { data: stats } = useStats();
+  // derive portal list dynamically from stats.by_portal when possible
+  const portalOptions = stats && stats.by_portal
+    ? Object.keys(stats.by_portal).sort()
+    : ["CPPP", "GeM", "State-MP", "State-UP", "State-MH", "State-RJ", "TenderDekho"];
 
   const activeCount =
     [state, portal].filter(Boolean).length +
@@ -58,7 +66,11 @@ export default function FilterRow() {
           onChange={(v) => setPortal(v || null)}
           placeholder="All Portals"
         >
-          {PORTALS.map((p) => <option key={p} value={p}>{p}</option>)}
+          {portalOptions.length === 0 ? (
+            <option value="">No portals available</option>
+          ) : (
+            portalOptions.map((p) => <option key={p} value={p}>{p}</option>)
+          )}
         </FilterSelect>
 
         <FilterSelect
