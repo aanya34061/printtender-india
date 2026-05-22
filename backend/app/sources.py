@@ -25,7 +25,6 @@ GOVERNMENT_PORTAL_SOURCES: tuple[str, ...] = (
     "State-MP",
     "State-UP",
     "State-MH",
-    "Maharashtra Tenders",
     "State-RJ",
 )
 

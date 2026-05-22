@@ -51,7 +51,7 @@ PORTAL_SCRAPERS = (
     ("MP Info", scrape_mp_info, PRINT_KEYWORDS),
     ("State-MP", _scrape_state("MP"), PRINT_KEYWORDS),
     ("State-UP", _scrape_state("UP"), PRINT_KEYWORDS),
-    ("Maharashtra Tenders", _scrape_state("MH"), PRINT_KEYWORDS),
+    ("State-MH", _scrape_state("MH"), PRINT_KEYWORDS),
     ("State-RJ", _scrape_state("RJ"), PRINT_KEYWORDS),
     ("TenderDekho", scrape_tenderdekho, PRINT_KEYWORDS),
     ("BidAssist", scrape_bidassist, PRINT_KEYWORDS),

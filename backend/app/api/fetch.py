@@ -16,7 +16,7 @@ async def _run_and_store() -> int:
 @router.post("/trigger")
 async def trigger_fetch() -> dict:
     count = await _run_and_store()
-    return {"status": "completed", "count": count}
+    return {"status": "triggered", "count": count}
 
 
 @router.get("/cron")

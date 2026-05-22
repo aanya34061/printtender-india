@@ -6,6 +6,7 @@ from sqlalchemy import Select, asc, desc, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.fallback_mp import get_fallback_tender, list_fallback_tenders
 from app.fetchers.deeplinks import (
     build_deep_link,
     classify_link,
@@ -217,8 +218,6 @@ async def list_tenders(
         pages = max(1, -(-total // limit))
         return {"tenders": tenders, "total": total, "page": page, "pages": pages}
     except (OSError, SQLAlchemyError):
-        from app.fallback_mp import list_fallback_tenders
-
         return list_fallback_tenders(
             q=q,
             state=state,
@@ -246,8 +245,6 @@ async def get_tender(
     except HTTPException:
         raise
     except (OSError, SQLAlchemyError):
-        from app.fallback_mp import get_fallback_tender
-
         tender = get_fallback_tender(tender_id)
         if tender is None:
             raise HTTPException(status_code=404, detail="Tender not found")

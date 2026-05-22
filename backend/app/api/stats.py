@@ -6,6 +6,7 @@ from sqlalchemy import distinct, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.fallback_mp import fallback_stats
 from app.models import AlertSubscription, FetchLog, Tender
 from app.sources import (
     ACTIVE_FETCH_SOURCES,
@@ -115,8 +116,6 @@ async def get_stats(session: AsyncSession = Depends(get_db)) -> dict:
             "keywords_tracked": keywords_tracked,
         }
     except (OSError, SQLAlchemyError):
-        from app.fallback_mp import fallback_stats
-
         return fallback_stats()
     except Exception as exc:
         # Log exception to a file for debugging and re-raise
