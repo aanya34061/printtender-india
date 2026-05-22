@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     REDIS_URL: str = ""
     RESEND_API_KEY: str = ""
     CRON_SECRET: str = ""
+    ENABLE_FETCH_API: bool = True
     APP_ENV: str = "development"
     FETCH_INTERVAL_HOURS: int = 6
     MAX_TENDERS_PER_KEYWORD: int = 100
@@ -34,6 +35,10 @@ class Settings(BaseSettings):
     @property
     def cron_secret(self) -> str:
         return self.CRON_SECRET
+
+    @property
+    def enable_fetch_api(self) -> bool:
+        return self.ENABLE_FETCH_API
 
     @property
     def app_env(self) -> str:

@@ -1,0 +1,53 @@
+name: Fetch tenders
+
+on:
+  schedule:
+    - cron: "15 */6 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: fetch-tenders
+  cancel-in-progress: false
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+      APP_ENV: production
+      ENABLE_FETCH_API: "true"
+      FRONTEND_URL: ${{ vars.FRONTEND_URL }}
+      BACKEND_URL: ${{ vars.BACKEND_URL }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install backend scraper dependencies
+        run: pip install -r backend/requirements-scraper.txt
+
+      - name: Install Playwright Chromium
+        run: python -m playwright install --with-deps chromium
+
+      - name: Run startup migrations and fetch cycle
+        working-directory: backend
+        run: |
+          python - <<'PY'
+          import asyncio
+          from app.database import create_tables, run_startup_migrations
+          from app.tasks.fetch_job import run_fetch_cycle
+
+          async def main() -> None:
+              await create_tables()
+              await run_startup_migrations()
+              count = await run_fetch_cycle()
+              print(f"FETCHED_NEW_TENDERS={count}")
+
+          asyncio.run(main())
+          PY

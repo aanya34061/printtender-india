@@ -8,7 +8,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.api.alerts import router as alerts_router
-from app.api.fetch import router as fetch_router
 from app.api.stats import router as stats_router
 from app.api.tenders import router as tenders_router
 from app.config import get_settings
@@ -45,7 +44,10 @@ app.add_middleware(
 app.include_router(tenders_router, prefix="/api/tenders", tags=["tenders"])
 app.include_router(alerts_router, prefix="/api/alerts", tags=["alerts"])
 app.include_router(stats_router, prefix="/api/stats", tags=["stats"])
-app.include_router(fetch_router, prefix="/api/fetch", tags=["fetch"])
+if settings.ENABLE_FETCH_API:
+    from app.api.fetch import router as fetch_router
+
+    app.include_router(fetch_router, prefix="/api/fetch", tags=["fetch"])
 
 
 @app.exception_handler(asyncpg.PostgresError)
