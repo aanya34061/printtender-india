@@ -128,13 +128,12 @@ pytest tests/ -v
 See [DEPLOY.md](./DEPLOY.md) for the full step-by-step deployment checklist.
 
 **Quick summary:**
-1. Supabase → copy `DATABASE_URL`
-2. Upstash → copy `REDIS_URL`
-3. Resend → copy `RESEND_API_KEY`
-4. Push to GitHub
-5. Render → import `render.yaml` → set env vars → deploy 3 services
-6. Vercel → import `frontend/` → set `VITE_API_BASE_URL` → deploy
-7. UptimeRobot → monitor `/health` every 5 min
+1. Local dev: use `backend/.env.example` defaults with Docker Compose Postgres + Redis
+2. Production: Supabase → copy `DATABASE_URL`, Upstash → copy `REDIS_URL`, Resend → copy `RESEND_API_KEY`
+3. Push to GitHub
+4. Render → import `render.yaml` → set env vars → deploy 3 services
+5. Vercel → import `frontend/` → set `VITE_API_BASE_URL` → deploy
+6. UptimeRobot → monitor `/health` every 5 min
 
 ---
 

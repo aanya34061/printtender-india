@@ -14,3 +14,15 @@ export function useStats() {
     refetchInterval: 1000 * 60 * 5,
   });
 }
+
+export function usePortalStatus() {
+  return useQuery({
+    queryKey: ["portal-status"],
+    queryFn: async () => {
+      const { data } = await axios.get(`${BASE}/api/stats/portals/status`);
+      return data;
+    },
+    staleTime: 1000 * 60 * 5,
+    refetchInterval: 1000 * 60 * 5,
+  });
+}

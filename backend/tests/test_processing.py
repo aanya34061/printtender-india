@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 import pandas as pd
 
 from app.processing.deduplicator import deduplicate
-from app.processing.normaliser import normalise, normalise_tender
+from app.processing.normaliser import normalise, normalise_tender, parse_bid_end_date
 from app.processing.tagger import pipeline, tag_category
 
 
@@ -50,12 +50,12 @@ def test_normaliser_value_parsing() -> None:
     df = normalise(
         [
             raw_record("A", "Book printing", value_raw="2.5 Lakh"),
-            raw_record("B", "Offset printing", value_raw="1 Crore"),
+            raw_record("B", "Answer books printing", value_raw="1 Crore"),
             raw_record("C", "Digital printing", value_raw="₹ 45,000"),
         ]
     )
 
-    assert df["value_inr"].tolist() == [250000.0, 10000000.0, 45000.0]
+    assert df["value_inr"].tolist() == [250000.0, 10000000.0]
 
 
 def test_normaliser_state_mapping() -> None:
@@ -101,6 +101,56 @@ def test_normalise_tender_accepts_fetcher_dict() -> None:
     assert tender.link_verified is True
 
 
+def test_normalise_tender_drops_broad_printing_term_without_product_keyword() -> None:
+    tender = normalise_tender(
+        raw_record(
+            "A",
+            "Offset printing work",
+            portal_url="https://example.com/tender/A",
+        )
+    )
+
+    assert tender is None
+
+
+def test_normalise_tender_drops_non_printing_result_even_if_keyword_was_used() -> None:
+    tender = normalise_tender(
+        raw_record(
+            "A",
+            "Construction of staff quarters",
+            portal_url="https://example.com/tender/A",
+        )
+    )
+
+    assert tender is None
+
+
+def test_normalise_tender_drops_result_when_keyword_hit_is_not_in_tender_text() -> None:
+    tender = normalise_tender(
+        raw_record(
+            "A",
+            "Directorate of Health Services Tender - MP Tender",
+            portal_url="https://example.com/tender/A",
+        )
+    )
+
+    assert tender is None
+
+
+def test_normalise_tender_uses_organisation_and_ref_for_keyword_matching() -> None:
+    tender = normalise_tender(
+        raw_record(
+            "ANSWER-BOOK-001",
+            "Annual rate contract",
+            portal_url="https://example.com/tender/A",
+        )
+        | {"organisation": "Directorate of Answer Book Printing"}
+    )
+
+    assert tender is not None
+    assert "answer books" in tender.keywords
+
+
 def test_normaliser_drops_past_deadline_records() -> None:
     df = normalise(
         [
@@ -110,6 +160,24 @@ def test_normaliser_drops_past_deadline_records() -> None:
     )
 
     assert df["ref_number"].tolist() == ["NEW"]
+
+
+def test_parse_bid_end_date_uses_end_of_day_for_date_only_inputs() -> None:
+    parsed = parse_bid_end_date("22 May 2026")
+
+    assert parsed is not None
+    assert parsed.isoformat() == "2026-05-22T18:29:59+00:00"
+
+
+def test_normaliser_drops_non_printing_rows() -> None:
+    df = normalise(
+        [
+            raw_record("A", "Construction of boundary wall"),
+            raw_record("B", "Book printing for schools"),
+        ]
+    )
+
+    assert df["ref_number"].tolist() == ["B"]
 
 
 def test_deduplicator_removes_exact_ref_number_duplicates() -> None:

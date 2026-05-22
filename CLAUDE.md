@@ -50,4 +50,3 @@ Sources -> Fetcher -> Processor -> DB+API -> Frontend
 - Never commit to main. Use feature branches.
 - Run `pytest` before marking any task complete.
 - Free tier limits: Supabase 500MB, Upstash 10k req/day, Resend 3k/month.
-- Never use TenderTiger API. Only use free government sources.

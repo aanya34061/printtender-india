@@ -18,20 +18,35 @@ const container = {
 };
 
 export default function TenderGrid({ data, isLoading, isError, onView, onBookmark, isBookmarked }) {
-  const { q, sort, page, setSort, setPage, categories } = useFilterStore();
+  const { q, sort, page, setSort, setPage, categories, state } = useFilterStore();
   const tenders = data?.tenders ?? [];
-  // Debug: show all tenders before client-side filtering (log portals)
-  try { 
-    const portals = Array.from(new Set(tenders.map((t) => t.portal_source || t.portal || 'Unknown')));
-    console.log && console.log('ALL DATA:', portals);
-    console.debug && console.debug('allTenders', tenders);
-  } catch (e) {}
-  // Apply multi-category client-side filtering (OR semantics)
+
+  // STATE FILTER (apply first)
+  let stateFiltered = tenders;
+  const selectedStates = (() => {
+    if (!state) return [];
+    if (Array.isArray(state)) return state;
+    if (typeof state === "string" && state.trim() !== "") return [state];
+    return [];
+  })();
+  const isAllStatesSelected = selectedStates.length === 0 || selectedStates.some(s => (s || '').toString().toLowerCase() === 'all states' || (s || '').toString().toLowerCase() === 'all');
+  if (!isAllStatesSelected) {
+    stateFiltered = tenders.filter((t) => selectedStates.some((s) => (t.state || '').toLowerCase() === (s || '').toLowerCase()));
+  }
+
+  // Apply multi-category client-side filtering (OR semantics) after state filter
   const selectedCategories = categories || [];
-  const displayTenders = (selectedCategories.length === 0)
-    ? tenders
-    : tenders.filter((t) => selectedCategories.some((cat) => (t.category || '').toLowerCase().includes(cat.toLowerCase())));
-  const total = displayTenders.length ?? 0;
+  let displayTenders = (selectedCategories.length === 0)
+    ? stateFiltered
+    : stateFiltered.filter((t) => selectedCategories.some((cat) => (t.category || '').toLowerCase().includes(cat.toLowerCase())));
+
+  // Fallback safety: if client-side filters remove everything but we do have server data, show all tenders instead of empty UI
+  if ((displayTenders?.length || 0) === 0 && (tenders?.length || 0) > 0) {
+    console.log && console.log('FILTERED EMPTY — falling back to all tenders');
+    displayTenders = tenders;
+  }
+
+  const total = data?.total ?? displayTenders.length ?? 0;
   // Keep server-side pagination info for controls
   const totalPages = data?.pages ?? 1;
 
@@ -84,7 +99,7 @@ export default function TenderGrid({ data, isLoading, isError, onView, onBookmar
       )}
 
       {/* Empty state */}
-      {!isLoading && !isError && displayTenders.length === 0 && (
+      {!isLoading && !isError && tenders.length === 0 && (
         <EmptyState query={q} />
       )}
 

@@ -6,7 +6,7 @@ from app.fetchers.aggregators import (
     scrape_bidassist,
     scrape_eprocure_search,
     scrape_tenderdekho,
-    scrape_tendertiger,
+    _extract_deadline,
 )
 from app.fetchers.base import RESULT_KEYS
 
@@ -70,26 +70,28 @@ def test_scrape_tenderdekho_extracts_slug_link() -> None:
 
 
 @respx.mock
-def test_scrape_tendertiger_extracts_detail_link() -> None:
+def test_scrape_tenderdekho_ignores_irrelevant_search_match() -> None:
     html = """
-    <tr>
-      <td><a href="/Tenderdetailbrief.aspx?SrNo=123456">Printing Tender</a></td>
-      <td>Ref No: TT-PRINT-001</td>
-      <td>Directorate of Printing</td>
-      <td>Madhya Pradesh</td>
-      <td>Due Date 20 Jun 2026</td>
-    </tr>
+    <article>
+      <a href="/tender/civil-work-bhopal">View details</a>
+      <span>Organization: PWD</span>
+      <span>Bhopal, Madhya Pradesh</span>
+      <span>Bid End Date 12 Jun 2026</span>
+    </article>
     """
-    respx.get(url__regex=r"https://global\.tendertiger\.com/quicksearch\.aspx.*").mock(
+    respx.get(url__regex=r"https://tenderdekho\.com/tenders.*").mock(
         return_value=httpx.Response(200, text=html)
     )
 
-    tenders = scrape_tendertiger("printing")
+    tenders = scrape_tenderdekho("printing")
 
-    assert len(tenders) == 1
-    assert_result_keys(tenders[0])
-    assert tenders[0]["portal_source"] == "TenderTiger"
-    assert "Tenderdetailbrief.aspx" in tenders[0]["portal_url"]
+    assert tenders == []
+
+
+def test_extract_deadline_supports_hyphenated_date() -> None:
+    text = "Last Date: 30-Mar-2026 Tender for printing work"
+
+    assert _extract_deadline(text) == "30-Mar-2026"
 
 
 @respx.mock

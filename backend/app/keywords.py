@@ -1,10 +1,21 @@
 """
-Central keyword list for PrintTender India.
+Central keyword lists for PrintTender India.
 Used by all fetchers and the Celery scheduler.
 """
 
-PRINT_KEYWORDS: list[str] = [
-    # ── Owner's product list (English) ─────────────────────────────────
+def _dedupe(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    output: list[str] = []
+    for value in values:
+        key = value.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        output.append(value)
+    return output
+
+
+PRODUCT_KEYWORD_CANONICAL: list[str] = [
     "calendars",
     "diary",
     "sticker",
@@ -33,11 +44,56 @@ PRINT_KEYWORDS: list[str] = [
     "envelopes",
     "marks sheet",
     "stationary",
+    "stationery",
     "note sheets",
     "files",
     "pamphlets",
     "annual reports",
     "souvenir",
+]
+
+PRODUCT_KEYWORD_VARIANTS: dict[str, tuple[str, ...]] = {
+    "calendars": ("calendar", "calender", "calenders"),
+    "books": ("book",),
+    "forms": ("form",),
+    "papers": ("paper",),
+    "note books": ("notebook", "notebook"),
+    "brochures": ("brochure", "broucher", "brouchers"),
+    "flyers": ("flyer",),
+    "visiting cards": ("visiting card",),
+    "certificates": ("certificate",),
+    "receipt books": ("receipt book",),
+    "catalogues": ("catalogue", "catalog", "catalogs", "catalogus"),
+    "pass books": ("pass book",),
+    "cards": ("card",),
+    "answer books": ("answer book",),
+    "exercise books": ("exercise book",),
+    "tags": ("tag",),
+    "posters": ("poster",),
+    "banners": ("banner",),
+    "labels": ("label",),
+    "desk pads": ("desk pad",),
+    "envelopes": ("envelope",),
+    "files": ("file",),
+    "pamphlets": ("pamphlet",),
+    "annual reports": ("annual report",),
+    "souvenir": ("souvenirs",),
+}
+
+IMAGE_PRODUCT_KEYWORDS: list[str] = _dedupe(
+    [
+        *PRODUCT_KEYWORD_CANONICAL,
+        *[
+            variant
+            for variants in PRODUCT_KEYWORD_VARIANTS.values()
+            for variant in variants
+        ],
+    ]
+)
+
+PRINT_KEYWORDS: list[str] = [
+    # ── Owner's product list from supplied image ───────────────────────
+    *IMAGE_PRODUCT_KEYWORDS,
     # ── Hindi transliterations (for CPPP / state portal searches) ───────
     "पंचांग",
     "डायरी",
@@ -87,4 +143,5 @@ PRINT_KEYWORDS: list[str] = [
 ]
 
 # Alias kept for backwards compatibility
+PRODUCT_KEYWORDS = IMAGE_PRODUCT_KEYWORDS
 PRINTING_KEYWORDS = PRINT_KEYWORDS

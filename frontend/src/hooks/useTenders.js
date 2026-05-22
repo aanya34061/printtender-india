@@ -9,7 +9,7 @@ export function useTenders(filters) {
     queryFn: async () => {
       const { data } = await axios.get(`${BASE}/api/tenders`, {
         params: {
-          q: filters.q || "printing",
+          q: filters.q || undefined,
           state: filters.state || undefined,
           portal: filters.portal || undefined,
           deadline_within_days: filters.deadline_within_days || 30,

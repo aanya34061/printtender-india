@@ -15,6 +15,8 @@ os.environ.setdefault("FRONTEND_URL", "http://localhost:5173")
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from app.api import stats as stats_api
+from app.api import tenders as tenders_api
 from app.database import get_db
 from app.main import app
 
@@ -31,13 +33,13 @@ def _make_tender_row(**kwargs):
         title="Printing of Government Forms",
         organisation="DoPT",
         state="Delhi",
-        portal_source="CPPP",
+        portal_source="TOI Tenders",
         category="printing",
         value_inr=Decimal("100000"),
         emd_amount=Decimal("5000"),
         bid_end_date=datetime(2026, 6, 30, tzinfo=timezone.utc),
         published_date=datetime(2026, 4, 1, tzinfo=timezone.utc),
-        portal_url="https://eprocure.gov.in/tender/1",
+        portal_url="https://timesofindia.indiatimes.com/tenders/1",
         tender_id=None,
         link_type="deep",
         link_verified=False,
@@ -113,6 +115,106 @@ async def test_health_check():
     assert "env" in r.json()
 
 
+@pytest.mark.asyncio
+async def test_database_failure_returns_503():
+    async def _broken_db():
+        raise OSError("database host not reachable")
+        yield
+
+    app.dependency_overrides[get_db] = _broken_db
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as c:
+            r = await c.get("/api/stats")
+        assert r.status_code == 503
+        assert "Database is unavailable" in r.json()["detail"]
+    finally:
+        _clear()
+
+
+@pytest.mark.asyncio
+async def test_list_tenders_falls_back_to_mp_feed_on_db_failure(monkeypatch):
+    session = AsyncMock()
+    session.scalar.side_effect = OSError("database host not reachable")
+    _override_db(session)
+    monkeypatch.setattr(
+        tenders_api,
+        "list_fallback_tenders",
+        lambda **_: {
+            "tenders": [
+                {
+                    "id": 1,
+                    "ref_number": "MP-1",
+                    "title": "Printing work",
+                    "organisation": "CMHO District Guna",
+                    "state": "Madhya Pradesh",
+                    "portal_source": "MP Tenders",
+                    "category": "printing",
+                    "value_inr": 0,
+                    "emd_amount": 0,
+                    "bid_end_date": "2026-06-06T18:00:00+00:00",
+                    "published_date": "2026-05-13T09:00:00+00:00",
+                    "portal_url": "https://mptenders.gov.in/nicgep/app",
+                    "tender_id": "2026_DHS_506394_1",
+                    "link_type": "direct",
+                    "link_verified": True,
+                    "keywords": ["printing"],
+                    "relevance_score": 80,
+                    "fetched_at": "2026-05-22T00:00:00+00:00",
+                    "is_active": True,
+                }
+            ],
+            "total": 1,
+            "page": 1,
+            "pages": 1,
+        },
+    )
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as c:
+            r = await c.get("/api/tenders?state=Madhya%20Pradesh")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["total"] == 1
+        assert body["tenders"][0]["portal_source"] == "MP Tenders"
+    finally:
+        _clear()
+
+
+@pytest.mark.asyncio
+async def test_stats_fall_back_to_mp_feed_on_db_failure(monkeypatch):
+    session = AsyncMock()
+    session.scalar.side_effect = OSError("database host not reachable")
+    _override_db(session)
+    monkeypatch.setattr(
+        stats_api,
+        "fallback_stats",
+        lambda: {
+            "total_active": 2,
+            "total_today": 0,
+            "expiring_7_days": 1,
+            "new_since_yesterday": 0,
+            "states_covered": 1,
+            "by_portal": {"MP Tenders": 2},
+            "by_source_category": {"portal": 2, "newspaper": 0},
+            "last_fetch": "2026-05-22T00:00:00+00:00",
+            "portals_count": 1,
+            "keywords_tracked": 0,
+        },
+    )
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as c:
+            r = await c.get("/api/stats")
+        assert r.status_code == 200
+        assert r.json()["by_portal"] == {"MP Tenders": 2}
+    finally:
+        _clear()
+
+
 # ---------------------------------------------------------------------------
 # Tenders
 # ---------------------------------------------------------------------------
@@ -130,6 +232,28 @@ async def test_list_tenders_200():
         assert r.status_code == 200
         body = r.json()
         assert "tenders" in body and "total" in body and "pages" in body
+        assert body["tenders"][0]["portal_source"] == "TOI Tenders"
+    finally:
+        _clear()
+
+
+@pytest.mark.asyncio
+async def test_list_tenders_canonicalizes_maharashtra_portal_source():
+    row = _make_tender_row(
+        state="Maharashtra",
+        portal_source="State-MH",
+        portal_url="https://mahatenders.gov.in/nicgep/app",
+    )
+    _override_db(_make_session(scalar_returns=[1, 1], scalars_returns=[row]))
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as c:
+            r = await c.get("/api/tenders?portal=Maharashtra%20Tenders")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["total"] == 1
+        assert body["tenders"][0]["portal_source"] == "Maharashtra Tenders"
     finally:
         _clear()
 
@@ -159,7 +283,7 @@ async def test_list_tenders_with_filters():
             transport=ASGITransport(app=app), base_url="http://test"
         ) as c:
             r = await c.get(
-                "/api/tenders?q=printing&state=Delhi&portal=CPPP&deadline_within_days=7"
+                "/api/tenders?q=printing&state=Delhi&portal=TOI%20Tenders&deadline_within_days=7"
             )
         assert r.status_code == 200
     finally:
@@ -185,10 +309,60 @@ async def test_get_tender_detail():
 
 
 @pytest.mark.asyncio
-async def test_get_tender_replaces_generic_homepage_link():
+async def test_get_tender_exposes_mp_tenders_source_and_url():
     row = _make_tender_row(
-        ref_number="CPPP/2025/04/123",
-        portal_url="https://eprocure.gov.in/",
+        portal_source="MP Tenders",
+        portal_url=(
+            "https://mptenders.gov.in/nicgep/app?component=%24DirectLink"
+            "&page=FrontEndTendersByNIT&service=direct&session=T&sp=S123"
+        ),
+        tender_id="S123",
+    )
+    _override_db(_make_session(get_returns=row))
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as c:
+            r = await c.get("/api/tenders/1")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["portal_source"] == "MP Tenders"
+        assert "mptenders.gov.in" in body["portal_url"]
+    finally:
+        _clear()
+
+
+@pytest.mark.asyncio
+async def test_get_tender_rewrites_gem_document_url_to_bid_search():
+    row = _make_tender_row(
+        portal_source="GeM",
+        ref_number="GEM/2026/B/7142926",
+        portal_url="https://bidplus.gem.gov.in/showbidDocument/8876535",
+        link_type="direct",
+        link_verified=True,
+    )
+    _override_db(_make_session(get_returns=row))
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as c:
+            r = await c.get("/api/tenders/1")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["portal_url"] == (
+            "https://bidplus.gem.gov.in/all-bids?search_bid=GEM%2F2026%2FB%2F7142926"
+        )
+        assert body["link_type"] == "search"
+    finally:
+        _clear()
+
+
+@pytest.mark.asyncio
+async def test_get_tender_rejects_inactive_portal_source():
+    row = _make_tender_row(
+        portal_source="Retired Portal",
+        ref_number="OLD/2025/04/123",
+        portal_url="https://example.com/tender",
         tender_id="S12345678",
         link_verified=False,
     )
@@ -198,16 +372,57 @@ async def test_get_tender_replaces_generic_homepage_link():
             transport=ASGITransport(app=app), base_url="http://test"
         ) as c:
             r = await c.get("/api/tenders/1")
+        assert r.status_code == 404
+    finally:
+        _clear()
+
+
+@pytest.mark.asyncio
+async def test_get_tender_falls_back_to_mp_feed_on_db_failure(monkeypatch):
+    session = AsyncMock()
+    session.get.side_effect = OSError("database host not reachable")
+    _override_db(session)
+    monkeypatch.setattr(
+        tenders_api,
+        "get_fallback_tender",
+        lambda tender_id: {
+            "id": tender_id,
+            "ref_number": "MP-1",
+            "title": "Printing work",
+            "organisation": "CMHO District Guna",
+            "state": "Madhya Pradesh",
+            "portal_source": "MP Tenders",
+            "category": "printing",
+            "value_inr": 0,
+            "emd_amount": 0,
+            "bid_end_date": "2026-06-06T18:00:00+00:00",
+            "published_date": "2026-05-13T09:00:00+00:00",
+            "portal_url": "https://mptenders.gov.in/nicgep/app",
+            "tender_id": "2026_DHS_506394_1",
+            "link_type": "direct",
+            "link_verified": True,
+            "keywords": ["printing"],
+            "relevance_score": 80,
+            "fetched_at": "2026-05-22T00:00:00+00:00",
+            "is_active": True,
+        },
+    )
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as c:
+            r = await c.get("/api/tenders/1")
+        assert r.status_code == 200
         body = r.json()
-        assert body["link_type"] == "deep"
-        assert "sp=S12345678" in body["portal_url"]
+        assert body["portal_source"] == "MP Tenders"
+        assert body["apply_steps"]
     finally:
         _clear()
 
 
 @pytest.mark.asyncio
-async def test_get_tender_apply_steps_cppp():
-    row = _make_tender_row(portal_source="CPPP")
+async def test_get_tender_apply_steps_are_generic():
+    row = _make_tender_row()
     _override_db(_make_session(get_returns=row))
     try:
         async with AsyncClient(
@@ -215,22 +430,7 @@ async def test_get_tender_apply_steps_cppp():
         ) as c:
             r = await c.get("/api/tenders/1")
         steps = r.json()["apply_steps"]
-        assert any("eprocure" in s for s in steps)
-    finally:
-        _clear()
-
-
-@pytest.mark.asyncio
-async def test_get_tender_apply_steps_gem():
-    row = _make_tender_row(portal_source="GeM")
-    _override_db(_make_session(get_returns=row))
-    try:
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as c:
-            r = await c.get("/api/tenders/1")
-        steps = r.json()["apply_steps"]
-        assert any("gem.gov.in" in s for s in steps)
+        assert any("reference number" in s for s in steps)
     finally:
         _clear()
 
@@ -273,7 +473,7 @@ async def test_get_stats_200():
         _make_session(
             scalar_returns=[10, 5, 8, 3, 7, datetime(2026, 5, 1, tzinfo=timezone.utc)],
             scalars_returns=[["printing"]],
-            execute_returns=[],
+            execute_returns=[("MP Tenders", 4), ("TOI Tenders", 2)],
         )
     )
     try:
@@ -290,8 +490,34 @@ async def test_get_stats_200():
             "new_since_yesterday",
             "states_covered",
             "by_portal",
+            "by_source_category",
+            "portals_count",
         ):
             assert key in body, f"missing key: {key}"
+        assert body["by_portal"] == {"MP Tenders": 4, "TOI Tenders": 2}
+        assert body["portals_count"] == 2
+    finally:
+        _clear()
+
+
+@pytest.mark.asyncio
+async def test_get_stats_merges_state_mh_into_maharashtra_tenders():
+    _override_db(
+        _make_session(
+            scalar_returns=[3, 0, 0, 0, 1, datetime(2026, 5, 1, tzinfo=timezone.utc)],
+            scalars_returns=[["printing"]],
+            execute_returns=[("State-MH", 2), ("Maharashtra Tenders", 1)],
+        )
+    )
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as c:
+            r = await c.get("/api/stats")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["by_portal"]["Maharashtra Tenders"] == 3
+        assert "State-MH" not in body["by_portal"]
     finally:
         _clear()
 

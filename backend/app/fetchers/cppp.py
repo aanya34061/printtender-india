@@ -4,6 +4,7 @@ import re
 import httpx
 
 from app.fetchers.base import BaseFetcher, REQUEST_HEADERS
+from app.fetchers.aggregators import scrape_eprocure_search
 from app.fetchers.deeplinks import (
     build_deep_link,
     extract_nic_tender_id,
@@ -31,6 +32,8 @@ class CPPPFetcher(BaseFetcher):
                 response = client.get(self.url, params=params)
                 response.raise_for_status()
             tenders = self.parse_xml(response.text, keyword)
+            if not tenders and self._requires_form_search(response.text):
+                tenders = scrape_eprocure_search(keyword)
             self.log_result(
                 self.portal_source, keyword, len(tenders), len(tenders), "success"
             )
@@ -109,6 +112,14 @@ class CPPPFetcher(BaseFetcher):
     @staticmethod
     def _tag_name(tag: str) -> str:
         return tag.rsplit("}", 1)[-1]
+
+    @staticmethod
+    def _requires_form_search(text: str) -> bool:
+        compact = " ".join(text.split()).casefold()
+        return (
+            compact.startswith("<html")
+            and "your session in the client area has expired" in compact
+        )
 
 
 MP_FILTER_TERMS = (

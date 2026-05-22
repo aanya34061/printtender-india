@@ -16,7 +16,6 @@ function portalBadgeClass(src) {
   if (src === "TenderTiger") return "badge badge-tendertiger";
   if (src === "TenderDekho") return "badge badge-tenderdekho";
   if (src === "BidAssist") return "badge badge-bidassist";
-  // Newspaper sources (red badge)
   if ([
     "TOI Tenders",
     "HT Tenders",
@@ -36,7 +35,18 @@ function portalBadgeClass(src) {
 }
 
 function isMpPortal(src) {
-  return ["MP Tenders", "MP PWD", "MPBSE", "MP Forest", "MP Info", "State-MP"].includes(src);
+  return [
+    "MP Tenders",
+    "MP PWD",
+    "MPBSE",
+    "MP Forest",
+    "MP Info",
+    "State-MP",
+    "State-UP",
+    "State-MH",
+    "Maharashtra Tenders",
+    "State-RJ",
+  ].includes(src);
 }
 
 function deadlineInfo(dateStr) {
@@ -80,10 +90,26 @@ const LINK_STYLES = {
 };
 
 export default function TenderCard({ tender, onView, isBookmarked, onBookmark }) {
+  function inferPortalSource(url) {
+    if (!url) return null;
+    try {
+      const u = new URL(url);
+      const host = u.hostname;
+      if (host.includes("mptenders.gov.in")) return "MP Tenders";
+      if (host.includes("timesofindia") || host.includes("indiatimes")) return "TOI Tenders";
+      if (host.includes("eprocure") || host.includes("eprocure.gov.in")) return "CPPP";
+      if (host.includes("gem") || host.includes("gecmart") || host.includes("gems") || host.includes("gem.gov.in")) return "GeM";
+      if (host.includes("tenderdekho")) return "TenderDekho";
+      return host;
+    } catch {
+      return null;
+    }
+  }
+  const portalSource = tender.portal_source || inferPortalSource(tender.portal_url);
+  const portal = portalSource || "Other";
   const deadline = deadlineInfo(tender.bid_end_date);
   const value = fmtValue(tender.value_inr);
   const emoji = STATE_EMOJI[tender.state] || "📍";
-  const portal = tender.portal_source || "Other";
   const linkType = tender.link_type || "deep";
   const add = useToastStore((s) => s.add);
 
@@ -110,10 +136,12 @@ export default function TenderCard({ tender, onView, isBookmarked, onBookmark })
       variants={cardVariants}
       className="tender-card flex flex-col p-5"
     >
-      {/* Top row: badge + bookmark */}
+      {/* Top row: portal/state badges + bookmark */}
       <div className="mb-3 flex items-start justify-between gap-2">
-        <div className="flex flex-wrap gap-1.5">
-          <span className={portalBadgeClass(portal)}>{portal}</span>
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className={portalBadgeClass(portal)} title={portal}>
+            {portal}
+          </span>
           {tender.state && (
             <span className="badge badge-other">
               {emoji} {tender.state}

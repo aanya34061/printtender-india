@@ -8,7 +8,30 @@ from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from playwright.async_api import async_playwright
 
 from app.fetchers.base import BaseFetcher, USER_AGENT
-from app.fetchers.deeplinks import build_deep_link
+from app.fetchers.deeplinks import build_deep_link, is_document_download_link
+
+GEM_GENERIC_TEXT_RE = re.compile(
+    r"^(?:view(?: details)?|details|bid details|bid document|document|download|apply|open|more|"
+    r"corrigendum|boq|ra details?|seller details?)$",
+    flags=re.IGNORECASE,
+)
+
+GEM_FIELD_LABELS = (
+    "Bid Title",
+    "Item",
+    "Title",
+    "Bid Number",
+    "Ministry",
+    "Department",
+    "Organisation",
+    "Organization",
+    "End Date",
+    "Bid End Date",
+    "Closing Date",
+    "Value",
+    "Estimated Bid Value",
+    "Bid Value",
+)
 
 
 class GeMFetcher(BaseFetcher):
@@ -67,19 +90,24 @@ class GeMFetcher(BaseFetcher):
             for index in range(count):
                 item = locator.nth(index)
                 direct_link = await self._first_bid_card_href(item)
-                text = " ".join((await item.inner_text()).split())
+                raw_text = await item.inner_text()
+                text = _compact_ws(raw_text)
                 if not text or text.casefold() in seen:
                     continue
                 seen.add(text.casefold())
 
                 extracted_bid_number = self._extract_bid_number(text)
                 bid_number = extracted_bid_number or f"GeM-{keyword}-{index + 1}"
+                title, linked_href = await _extract_gem_primary_candidate(
+                    item, raw_text, text
+                )
 
-                if direct_link:
+                chosen_link = _prefer_gem_navigation_link(linked_href, direct_link)
+                if chosen_link:
                     portal_url = (
-                        direct_link
-                        if direct_link.startswith("http")
-                        else urljoin("https://bidplus.gem.gov.in", direct_link)
+                        chosen_link
+                        if chosen_link.startswith("http")
+                        else urljoin("https://bidplus.gem.gov.in", chosen_link)
                     )
                     link_verified = True
                     tender_id = self._document_id_from_url(portal_url) or bid_number
@@ -93,8 +121,7 @@ class GeMFetcher(BaseFetcher):
                 tenders.append(
                     self.build_record(
                         ref_number=bid_number,
-                        title=self._extract_field(text, ("Bid Title", "Item", "Title"))
-                        or self._fallback_title(text),
+                        title=title,
                         organisation=self._extract_field(
                             text,
                             ("Ministry", "Department", "Organisation", "Organization"),
@@ -117,14 +144,15 @@ class GeMFetcher(BaseFetcher):
 
     async def _first_link(self, item) -> str | None:
         links = item.locator("a[href]")
-        if await links.count() == 0:
-            return None
-        return await links.first.get_attribute("href")
+        hrefs: list[str] = []
+        count = await links.count()
+        for index in range(min(count, 8)):
+            href = await links.nth(index).get_attribute("href")
+            if href:
+                hrefs.append(href)
+        return _pick_best_gem_href(hrefs)
 
     async def _first_bid_card_href(self, item) -> str | None:
-        bid_links = item.locator("a[href*='showbidDocument']")
-        if await bid_links.count() > 0:
-            return await bid_links.first.get_attribute("href")
         return await self._first_link(item)
 
     @staticmethod
@@ -151,6 +179,152 @@ class GeMFetcher(BaseFetcher):
     @staticmethod
     def _fallback_title(text: str) -> str:
         return text[:180]
+
+
+def _compact_ws(text: str) -> str:
+    return " ".join((text or "").split())
+
+
+def _clean_gem_candidate(text: str) -> str:
+    return _compact_ws(text).strip(" -|:")
+
+
+def _looks_like_field_value(text: str) -> bool:
+    normalized = _clean_gem_candidate(text)
+    if not normalized:
+        return False
+    return any(
+        normalized.casefold().startswith(f"{label.casefold()}:")
+        or normalized.casefold() == label.casefold()
+        for label in GEM_FIELD_LABELS
+    )
+
+
+def _is_generic_gem_text(text: str) -> bool:
+    normalized = _clean_gem_candidate(text)
+    if not normalized:
+        return True
+    if GEM_GENERIC_TEXT_RE.fullmatch(normalized):
+        return True
+    return _looks_like_field_value(normalized)
+
+
+def _pick_gem_title_from_candidates(
+    raw_text: str, fallback_text: str, candidates: list[str]
+) -> str:
+    seen: set[str] = set()
+    for candidate in candidates:
+        cleaned = _clean_gem_candidate(candidate)
+        key = cleaned.casefold()
+        if key in seen or _is_generic_gem_text(cleaned):
+            continue
+        seen.add(key)
+        if len(cleaned) >= 6:
+            return cleaned
+
+    for line in raw_text.splitlines():
+        cleaned = _clean_gem_candidate(line)
+        key = cleaned.casefold()
+        if key in seen or _is_generic_gem_text(cleaned):
+            continue
+        seen.add(key)
+        if len(cleaned) >= 6 and not GeMFetcher._extract_bid_number(cleaned):
+            return cleaned
+
+    return GeMFetcher._extract_field(fallback_text, ("Bid Title", "Item", "Title")) or GeMFetcher._fallback_title(fallback_text)
+
+
+async def _extract_gem_title(item, raw_text: str, compact_text: str) -> str:
+    title, _href = await _extract_gem_primary_candidate(item, raw_text, compact_text)
+    return title
+
+
+def _pick_gem_primary_candidate(
+    raw_text: str,
+    fallback_text: str,
+    candidates: list[tuple[str, str | None]],
+) -> tuple[str, str | None]:
+    seen: set[str] = set()
+    for text, href in candidates:
+        cleaned = _clean_gem_candidate(text)
+        key = cleaned.casefold()
+        if key in seen or _is_generic_gem_text(cleaned):
+            continue
+        seen.add(key)
+        if len(cleaned) >= 6:
+            return cleaned, href
+    return _pick_gem_title_from_candidates(raw_text, fallback_text, []), None
+
+
+async def _extract_gem_primary_candidate(
+    item, raw_text: str, compact_text: str
+) -> tuple[str, str | None]:
+    selectors = (
+        ".bid-title",
+        ".card-title",
+        ".item-title",
+        ".item-name",
+        ".bid-name",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "a[href*='bid-details']",
+        "a[href*='showbidDocument']",
+        "a[href]",
+    )
+    candidates: list[tuple[str, str | None]] = []
+    for selector in selectors:
+        locator = item.locator(selector)
+        count = await locator.count()
+        for index in range(min(count, 5)):
+            node = locator.nth(index)
+            value = await node.inner_text()
+            href = await node.evaluate(
+                """(el) => {
+                    const anchor = el.closest('a[href]') || el.querySelector('a[href]');
+                    return anchor ? anchor.getAttribute('href') : null;
+                }"""
+            )
+            if value:
+                candidates.append((value, href))
+    return _pick_gem_primary_candidate(raw_text, compact_text, candidates)
+
+
+def _pick_best_gem_href(hrefs: list[str]) -> str | None:
+    cleaned = [href.strip() for href in hrefs if href and href.strip()]
+    if not cleaned:
+        return None
+
+    for href in cleaned:
+        lowered = href.casefold()
+        if "bid-details" in lowered:
+            return href
+    for href in cleaned:
+        lowered = href.casefold()
+        if "showbiddocument" in lowered:
+            return href
+    return cleaned[0]
+
+
+def _prefer_gem_navigation_link(
+    linked_href: str | None, direct_href: str | None
+) -> str | None:
+    if linked_href and direct_href:
+        linked_is_download = is_document_download_link(
+            linked_href
+            if linked_href.startswith("http")
+            else urljoin("https://bidplus.gem.gov.in", linked_href)
+        )
+        direct_is_download = is_document_download_link(
+            direct_href
+            if direct_href.startswith("http")
+            else urljoin("https://bidplus.gem.gov.in", direct_href)
+        )
+        if linked_is_download and not direct_is_download:
+            return direct_href
+    return linked_href or direct_href
 
 
 def main() -> None:

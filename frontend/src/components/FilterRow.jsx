@@ -1,4 +1,6 @@
 import { SlidersHorizontal, X } from "lucide-react";
+import { useEffect } from "react";
+import { useStats } from "../hooks/useStats.js";
 import { useFilterStore } from "../store/filterStore.js";
 
 const STATES = [
@@ -8,8 +10,6 @@ const STATES = [
   "Tamil Nadu","Telangana","Uttar Pradesh","Uttarakhand","West Bengal",
   "Jammu & Kashmir","Puducherry","Chandigarh",
 ];
-
-// PORTALS list removed — derive dynamically from backend stats when available
 
 const DEADLINE_OPTS = [
   { label: "Today only", value: 1 },
@@ -26,40 +26,23 @@ const VALUE_OPTS = [
   { label: "Above ₹1 Cr", min: 10_000_000, max: null },
 ];
 
-import { useStats } from "../hooks/useStats.js";
-
 export default function FilterRow() {
   const {
     state, portal, deadline_within_days, min_value, max_value,
     setState, setPortal, setDeadlineDays, setValueRange, resetFilters,
   } = useFilterStore();
-
   const { data: stats } = useStats();
-  // derive portal list dynamically from stats.by_portal when possible
-  const KNOWN_NEWSPAPERS = [
-    "TOI Tenders",
-    "HT Tenders",
-    "ET Tenders",
-    "The Hindu Tenders",
-    "Dainik Bhaskar",
-    "Patrika",
-    "Nai Dunia",
-    "Navbharat",
-    "Dainik Jagran",
-    "Amar Ujala",
-    "Tender Notice India",
-    "India Tender Notice",
-    "Public Notice India",
-  ];
 
-  const portalOptions = (() => {
-    if (stats && stats.by_portal) {
-      const keys = Object.keys(stats.by_portal);
-      const merged = Array.from(new Set([...keys, ...KNOWN_NEWSPAPERS]));
-      return merged.sort();
+  const portalKeys = Object.entries(stats?.by_portal ?? {})
+    .filter(([, count]) => Number(count) > 0)
+    .map(([name]) => name);
+  const portalOptions = Array.from(new Set(portalKeys)).sort();
+
+  useEffect(() => {
+    if (portal && portalOptions.length > 0 && !portalOptions.includes(portal)) {
+      setPortal(null);
     }
-    return ["CPPP", "GeM", "State-MP", "State-UP", "State-MH", "State-RJ", "TenderDekho", ...KNOWN_NEWSPAPERS].sort();
-  })();
+  }, [portal, portalOptions, setPortal]);
 
   const activeCount =
     [state, portal].filter(Boolean).length +
@@ -82,17 +65,15 @@ export default function FilterRow() {
           {STATES.map((s) => <option key={s} value={s}>{s}</option>)}
         </FilterSelect>
 
-        <FilterSelect
-          value={portal ?? ""}
-          onChange={(v) => setPortal(v || null)}
-          placeholder="All Portals"
-        >
-          {portalOptions.length === 0 ? (
-            <option value="">No portals available</option>
-          ) : (
-            portalOptions.map((p) => <option key={p} value={p}>{p}</option>)
-          )}
-        </FilterSelect>
+        {portalOptions.length > 0 && (
+          <FilterSelect
+            value={portalOptions.includes(portal) ? portal : ""}
+            onChange={(v) => setPortal(v || null)}
+            placeholder="All Portals"
+          >
+            {portalOptions.map((p) => <option key={p} value={p}>{p}</option>)}
+          </FilterSelect>
+        )}
 
         <FilterSelect
           value={deadline_within_days !== 30 ? String(deadline_within_days) : ""}
@@ -138,7 +119,9 @@ export default function FilterRow() {
         )}
       </div>
       <p className="mx-auto max-w-6xl px-6 pb-3 text-xs sm:px-10" style={{ color: "var(--muted)" }}>
-        Covering: MP Tenders · MP PWD · MPBSE · GeM MP · CPPP MP · MP Forest · MP Info.
+        {portalOptions.length > 0
+          ? `Available tender portals: ${portalOptions.join(" · ")}`
+          : "Portal filters appear when the backend has active tenders."}
       </p>
     </div>
   );

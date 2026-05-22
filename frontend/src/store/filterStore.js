@@ -1,8 +1,8 @@
 import { create } from "zustand";
 
 export const useFilterStore = create((set) => ({
-  q: "printing",
-  state: "Madhya Pradesh",
+  q: "",
+  state: null,
   portal: null,
   // categories now supports multiple selections
   categories: [],
@@ -11,7 +11,7 @@ export const useFilterStore = create((set) => ({
   max_value: null,
   sort: "deadline_asc",
   page: 1,
-  limit: 20,
+  limit: 6,
 
   setQ: (q) => set({ q, page: 1 }),
   setState: (state) => set({ state, page: 1 }),
@@ -28,6 +28,6 @@ export const useFilterStore = create((set) => ({
   setSort: (sort) => set({ sort, page: 1 }),
   setPage: (page) => set({ page }),
   resetFilters: () =>
-    set({ q: "printing", state: "Madhya Pradesh", portal: null, categories: [], deadline_within_days: 30,
-          min_value: null, max_value: null, sort: "deadline_asc", page: 1 }),
+    set({ q: "", state: null, portal: null, categories: [], deadline_within_days: 30,
+          min_value: null, max_value: null, sort: "deadline_asc", page: 1, limit: 6 }),
 }));

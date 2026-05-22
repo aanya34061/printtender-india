@@ -166,7 +166,6 @@ def _tender_card(tender: Any) -> str:
     title = _get(tender, "title") or "Tender notice"
     organisation = _get(tender, "organisation") or "Not specified"
     state = _get(tender, "state") or "India"
-    portal = _get(tender, "portal_source") or "Tender portal"
     deadline = _get(tender, "bid_end_date")
     url = _deep_link_for(tender)
     deadline_label, deadline_color = _deadline_display(deadline)
@@ -175,7 +174,7 @@ def _tender_card(tender: Any) -> str:
       <h2 style="margin:0 0 8px;font-size:16px;line-height:1.35;color:{TEXT}">{escape(str(title))}</h2>
       <p style="margin:0 0 6px;color:{MUTED};font-size:13px;line-height:1.5">{escape(str(organisation))}</p>
       <p style="margin:0 0 10px;color:{MUTED};font-size:13px">
-        {escape(str(state))} · {escape(str(portal))}
+        {escape(str(state))}
       </p>
       <p style="margin:0 0 14px;color:{deadline_color};font-size:13px;font-weight:700">{escape(deadline_label)}</p>
       <a href="{escape(url)}" style="display:inline-block;color:{SAFFRON};font-weight:800;text-decoration:none">View and Apply</a>

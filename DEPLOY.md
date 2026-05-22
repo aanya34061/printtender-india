@@ -18,6 +18,7 @@ Step-by-step guide to deploy the full stack for free using Supabase + Upstash + 
 - [ ] Wait for project to provision (~2 min)
 - [ ] Go to **Settings → Database → Connection string (URI)**
 - [ ] Copy the `postgresql://...` URL
+- [ ] If you use a pooler hostname (`*.pooler.supabase.com`), copy the full pooled connection string exactly as Supabase shows it, including the correct username format and port
 - [ ] Add `?sslmode=require` to the end if not present
 - [ ] Save as `DATABASE_URL`
 

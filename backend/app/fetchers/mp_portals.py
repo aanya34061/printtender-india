@@ -14,53 +14,51 @@ from playwright.async_api import async_playwright
 
 from app.fetchers.base import BaseFetcher, REQUEST_HEADERS, USER_AGENT
 from app.fetchers.deeplinks import build_deep_link, extract_nic_tender_id
+from app.fetchers.gem import (
+    _extract_gem_primary_candidate,
+    _pick_best_gem_href,
+    _prefer_gem_navigation_link,
+)
+from app.keywords import IMAGE_PRODUCT_KEYWORDS
 
 MP_STATE = "Madhya Pradesh"
+MPTENDERS_URL = "https://mptenders.gov.in/nicgep/app"
 
-MP_PRINT_KEYWORDS: list[str] = [
+
+def _dedupe_keywords(keywords: list[str]) -> list[str]:
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for keyword in keywords:
+        key = keyword.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(keyword)
+    return deduped
+
+
+MP_TENDERS_KEYWORDS: list[str] = _dedupe_keywords([
+    *IMAGE_PRODUCT_KEYWORDS,
+    "calendar",
+    "book",
+    "form",
+    "brochure",
+    "certificate",
+    "answer book",
+    "poster",
+    "banner",
+    "label",
+    "envelope",
+    "pamphlet",
+    "annual report",
+])
+
+MP_PRINT_KEYWORDS: list[str] = _dedupe_keywords([
+    *MP_TENDERS_KEYWORDS,
     "printing",
     "offset printing",
     "digital printing",
     "stationery",
-    "books",
-    "book",
-    "forms",
-    "form",
-    "papers",
-    "note books",
-    "brochure",
-    "brochures",
-    "flyers",
-    "visiting cards",
-    "certificate",
-    "certificates",
-    "receipt books",
-    "prospectus",
-    "catalogues",
-    "pass books",
-    "duplex box",
-    "cards",
-    "answer books",
-    "answer book",
-    "exercise books",
-    "tags",
-    "poster",
-    "posters",
-    "banner",
-    "banners",
-    "label",
-    "labels",
-    "desk pads",
-    "envelope",
-    "envelopes",
-    "marks sheet",
-    "note sheets",
-    "files",
-    "pamphlet",
-    "pamphlets",
-    "annual report",
-    "annual reports",
-    "souvenir",
     "security printing",
     "textbook",
     "textbook printing",
@@ -89,7 +87,7 @@ MP_PRINT_KEYWORDS: list[str] = [
     "नोटबुक",
     "उत्तर पुस्तिका",
     "वार्षिक प्रतिवेदन",
-]
+])
 
 MP_STATE_TERMS = (
     "madhya pradesh",
@@ -128,6 +126,51 @@ def _fetch_html(url: str, *, params: dict[str, str] | None = None) -> str:
         response = client.get(url, params=params)
         response.raise_for_status()
         return response.text
+
+
+def _fetch_mptenders_keyword_html(keyword: str) -> str:
+    _wait_between_requests()
+    with httpx.Client(
+        timeout=30, follow_redirects=True, headers=REQUEST_HEADERS
+    ) as client:
+        home = client.get(MPTENDERS_URL)
+        home.raise_for_status()
+        soup = BeautifulSoup(home.text, "lxml")
+        form = soup.find("form", {"id": "tenderSearch"})
+        if form is None:
+            raise RuntimeError("MP Tenders search form not found")
+
+        data = {
+            str(field.get("name")): str(field.get("value") or "")
+            for field in form.find_all("input")
+            if field.get("name")
+        }
+        data["SearchDescription"] = keyword
+        data["Go"] = "Go"
+        action = urljoin(MPTENDERS_URL, str(form.get("action") or "/nicgep/app"))
+        response = client.post(action, data=data)
+        response.raise_for_status()
+        return response.text
+
+
+def _parse_nic_keyword_results(
+    *,
+    html: str,
+    keyword: str,
+    base_url: str,
+    portal_source: str,
+) -> list[dict]:
+    soup = BeautifulSoup(html, "lxml")
+    tenders = [
+        record
+        for row in soup.select("table.list_table tr, table tr")
+        if (
+            record := _record_from_nic_row(
+                row=row, keyword=keyword, base_url=base_url, portal_source=portal_source
+            )
+        )
+    ]
+    return _dedupe_by_ref(tenders)
 
 
 def _dedupe_by_ref(tenders: list[dict]) -> list[dict]:
@@ -180,9 +223,19 @@ def _record_from_nic_row(
     base_url: str,
     portal_source: str,
 ) -> dict | None:
-    columns = row.find_all("td")
+    columns = row.find_all("td", recursive=False)
     if len(columns) < 2:
         return None
+
+    direct_url, tender_id = _first_direct_nic_link(row, base_url)
+    if len(columns) == 6 and re.match(r"^\d+\.?$", _cell_text(columns, 0)):
+        return _record_from_mptenders_result_row(
+            columns=columns,
+            keyword=keyword,
+            portal_source=portal_source,
+            direct_url=direct_url,
+            tender_id=tender_id,
+        )
 
     direct_url, tender_id = _first_direct_nic_link(row, base_url)
     row_text = row.get_text(" ", strip=True)
@@ -192,6 +245,8 @@ def _record_from_nic_row(
     deadline = _cell_text(columns, 4)
     value = _cell_text(columns, 5)
 
+    if _is_boilerplate_tender_row(row_text):
+        return None
     if not ref_number and tender_id:
         ref_number = tender_id
     if not ref_number or not title:
@@ -213,6 +268,79 @@ def _record_from_nic_row(
     )
 
 
+def _record_from_mptenders_result_row(
+    *,
+    columns: list[Tag],
+    keyword: str,
+    portal_source: str,
+    direct_url: str | None,
+    tender_id: str | None,
+) -> dict | None:
+    title_ref_text = _cell_text(columns, 4)
+    title, ref_number = _split_mptenders_title_ref(title_ref_text)
+    organisation = _cell_text(columns, 5)
+    deadline = _cell_text(columns, 2)
+
+    if (
+        not title
+        or not ref_number
+        or _is_boilerplate_tender_row(title_ref_text)
+        or not _contains_keyword_phrase(title_ref_text, keyword)
+    ):
+        return None
+
+    portal_url = direct_url or build_deep_link(portal_source, ref_number, tender_id)
+    return _builder.build_record(
+        ref_number=ref_number,
+        title=title,
+        organisation=organisation,
+        state=MP_STATE,
+        portal_source=portal_source,
+        deadline_raw=deadline,
+        value_raw=None,
+        portal_url=portal_url,
+        keyword_hit=keyword,
+        tender_id=tender_id,
+        link_verified=bool(direct_url),
+    )
+
+
+def _split_mptenders_title_ref(value: str) -> tuple[str, str]:
+    parts = re.findall(r"\[([^\]]+)\]", value)
+    if not parts:
+        return value.strip(), _extract_ref(value) or ""
+    title = parts[0].strip()
+    ref_number = (parts[1] if len(parts) > 1 else parts[0]).strip()
+    return title, ref_number
+
+
+def _is_boilerplate_tender_row(text: str) -> bool:
+    normalized = " ".join(text.casefold().split())
+    return any(
+        marker in normalized
+        for marker in (
+            "session in the client area has expired",
+            "click here to re-login",
+            "for further information please contact helpdesk",
+            "eprocurement system government of madhya pradesh",
+            "no tenders found",
+        )
+    )
+
+
+def _contains_keyword_phrase(text: str, keyword: str) -> bool:
+    normalized = " ".join(text.casefold().split())
+    term = " ".join(keyword.casefold().split())
+    if not term:
+        return False
+    if any(ord(char) > 127 for char in term):
+        return term in normalized
+
+    escaped = re.escape(term).replace(r"\ ", r"\s+")
+    pattern = rf"(?<![a-z0-9]){escaped}(?![a-z0-9])"
+    return re.search(pattern, normalized) is not None
+
+
 def _scrape_nic_keyword_portal(
     *,
     keyword: str,
@@ -232,27 +360,40 @@ def _scrape_nic_keyword_portal(
         _builder.log_result(portal_source, keyword, 0, 0, "error", str(exc))
         return []
 
-    soup = BeautifulSoup(html, "lxml")
-    tenders = [
-        record
-        for row in soup.select("table.list_table tr, table tr")
-        if (
-            record := _record_from_nic_row(
-                row=row, keyword=keyword, base_url=base_url, portal_source=portal_source
-            )
-        )
-    ]
-    tenders = _dedupe_by_ref(tenders)
+    tenders = _parse_nic_keyword_results(
+        html=html,
+        keyword=keyword,
+        base_url=base_url,
+        portal_source=portal_source,
+    )
     _builder.log_result(portal_source, keyword, len(tenders), len(tenders), "success")
     return tenders
 
 
 def scrape_mp_tenders(keyword: str) -> list[dict]:
-    return _scrape_nic_keyword_portal(
+    portal_source = "MP Tenders"
+    tenders = _scrape_nic_keyword_portal(
         keyword=keyword,
-        base_url="https://mptenders.gov.in/nicgep/app",
-        portal_source="MP Tenders",
+        base_url=MPTENDERS_URL,
+        portal_source=portal_source,
     )
+    if tenders:
+        return tenders
+
+    try:
+        html = _fetch_mptenders_keyword_html(keyword)
+    except Exception as exc:
+        _builder.log_result(portal_source, keyword, 0, 0, "error", str(exc))
+        return []
+
+    tenders = _parse_nic_keyword_results(
+        html=html,
+        keyword=keyword,
+        base_url=MPTENDERS_URL,
+        portal_source=portal_source,
+    )
+    _builder.log_result(portal_source, keyword, len(tenders), len(tenders), "success")
+    return tenders
 
 
 def scrape_mp_pwd(keyword: str) -> list[dict]:
@@ -293,30 +434,32 @@ async def scrape_gem_mp_async(keyword: str) -> list[dict]:
                 for index in range(count):
                     item = locator.nth(index)
                     direct_href = await _first_bid_href(item)
-                    text = " ".join((await item.inner_text()).split())
+                    raw_text = await item.inner_text()
+                    text = " ".join(raw_text.split())
                     if not text or text.casefold() in seen or not _is_mp_text(text):
                         continue
                     seen.add(text.casefold())
 
                     extracted_bid_number = _extract_gem_bid_number(text)
                     bid_number = extracted_bid_number or f"GeM-MP-{keyword}-{index + 1}"
+                    title, linked_href = await _extract_gem_primary_candidate(
+                        item, raw_text, text
+                    )
+                    chosen_href = _prefer_gem_navigation_link(linked_href, direct_href)
                     tender_id = (
-                        _gem_document_id_from_url(direct_href)
-                        if direct_href
+                        _gem_document_id_from_url(chosen_href)
+                        if chosen_href
                         else extracted_bid_number
                     )
                     portal_url = (
-                        urljoin("https://bidplus.gem.gov.in", direct_href)
-                        if direct_href
+                        urljoin("https://bidplus.gem.gov.in", chosen_href)
+                        if chosen_href
                         else build_deep_link(portal_source, bid_number, tender_id)
                     )
                     tenders.append(
                         _builder.build_record(
                             ref_number=bid_number,
-                            title=_extract_labelled_field(
-                                text, ("Bid Title", "Item", "Title")
-                            )
-                            or text[:180],
+                            title=title,
                             organisation=_extract_labelled_field(
                                 text,
                                 (
@@ -337,7 +480,7 @@ async def scrape_gem_mp_async(keyword: str) -> list[dict]:
                             portal_url=portal_url,
                             keyword_hit=keyword,
                             tender_id=tender_id,
-                            link_verified=bool(direct_href),
+                            link_verified=bool(chosen_href),
                         )
                     )
         finally:
@@ -468,13 +611,14 @@ def _scrape_document_listing(
 
 
 async def _first_bid_href(item) -> str | None:
-    links = item.locator("a[href*='showbidDocument']")
-    if await links.count() > 0:
-        return await links.first.get_attribute("href")
     links = item.locator("a[href]")
-    if await links.count() > 0:
-        return await links.first.get_attribute("href")
-    return None
+    hrefs: list[str] = []
+    count = await links.count()
+    for index in range(min(count, 8)):
+        href = await links.nth(index).get_attribute("href")
+        if href:
+            hrefs.append(href)
+    return _pick_best_gem_href(hrefs)
 
 
 def _gem_document_id_from_url(url: str | None) -> str | None:

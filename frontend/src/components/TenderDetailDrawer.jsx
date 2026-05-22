@@ -12,7 +12,18 @@ function portalBadgeClass(src) {
   if (!src) return "badge badge-other";
   if (src === "CPPP") return "badge badge-cppp";
   if (src === "GeM") return "badge badge-gem";
-  if (["MP Tenders", "MP PWD", "MPBSE", "MP Forest", "MP Info", "State-MP"].includes(src)) return "badge badge-mp";
+  if ([
+    "MP Tenders",
+    "MP PWD",
+    "MPBSE",
+    "MP Forest",
+    "MP Info",
+    "State-MP",
+    "State-UP",
+    "State-MH",
+    "Maharashtra Tenders",
+    "State-RJ",
+  ].includes(src)) return "badge badge-mp";
   if (src === "TenderTiger") return "badge badge-tendertiger";
   if (src === "TenderDekho") return "badge badge-tenderdekho";
   if (src === "BidAssist") return "badge badge-bidassist";
@@ -48,6 +59,27 @@ export default function TenderDetailDrawer({ tenderId, onClose, onSetAlert }) {
   const [checked, setChecked] = useState({});
   const add = useToastStore((s) => s.add);
 
+  function inferPortalSource(url) {
+    if (!url) return null;
+    try {
+      const u = new URL(url);
+      const host = u.hostname;
+      if (host.includes("mptenders.gov.in")) return "MP Tenders";
+      if (host.includes("timesofindia") || host.includes("indiatimes")) return "TOI Tenders";
+      if (host.includes("eprocure") || host.includes("eprocure.gov.in")) return "CPPP";
+      if (host.includes("gem") || host.includes("gecmart") || host.includes("gems") || host.includes("gem.gov.in")) return "GeM";
+      if (host.includes("tenderdekho")) return "TenderDekho";
+      return host;
+    } catch {
+      return null;
+    }
+  }
+  const portalSource = tender?.portal_source || inferPortalSource(tender?.portal_url);
+
+  useEffect(() => {
+    setChecked({});
+  }, [tenderId]);
+
   useEffect(() => {
     const fn = (e) => { if (e.key === "Escape") onClose(); };
     document.addEventListener("keydown", fn);
@@ -68,7 +100,7 @@ export default function TenderDetailDrawer({ tenderId, onClose, onSetAlert }) {
     if (!tender?.portal_url) return;
     if (tender.link_type === "search") {
       add("🔍 No direct link — opening portal search", "info");
-    } else if (tender.link_type === "deep" && tender.portal_source === "GeM") {
+    } else if (tender.link_type === "deep" && portalSource === "GeM") {
       add("Opening GeM — click the bid in search results to view full details", "info");
     }
     window.open(tender.portal_url, "_blank", "noreferrer");
@@ -129,9 +161,9 @@ export default function TenderDetailDrawer({ tenderId, onClose, onSetAlert }) {
                 <>
                   {/* Badges */}
                   <div className="mb-4 flex flex-wrap gap-2">
-                    {tender.portal_source && (
-                      <span className={portalBadgeClass(tender.portal_source)}>
-                        {tender.portal_source}
+                    {portalSource && (
+                      <span className={portalBadgeClass(portalSource)} title={portalSource}>
+                        {portalSource}
                       </span>
                     )}
                     {tender.state && (
@@ -176,7 +208,7 @@ export default function TenderDetailDrawer({ tenderId, onClose, onSetAlert }) {
                         {tender.apply_steps.map((step, i) => (
                           <li
                             key={i}
-                            onClick={() => setChecked(p => ({ ...p, [i]: !p[i] }))}
+                            onClick={() => setChecked((p) => ({ ...p, [i]: !p[i] }))}
                             className="flex cursor-pointer items-start gap-3 rounded-lg p-3 text-sm transition"
                             style={{ border: "1px solid rgba(255,255,255,0.06)", background: "rgba(0,0,0,0.2)" }}
                             onMouseEnter={(e) => e.currentTarget.style.background = "rgba(255,255,255,0.04)"}
@@ -221,7 +253,7 @@ export default function TenderDetailDrawer({ tenderId, onClose, onSetAlert }) {
                       ? "🔍 Search by Ref No"
                       : tender.link_type === "newspaper"
                       ? "Read Notice"
-                      : tender.link_type === "deep" && tender.portal_source === "GeM"
+                      : tender.link_type === "deep" && portalSource === "GeM"
                       ? "🔍 Search on GeM (click result to open)"
                       : "View Official Tender"}
                     <ExternalLink className="h-4 w-4" />

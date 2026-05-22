@@ -1,8 +1,11 @@
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+import asyncpg
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.api.alerts import router as alerts_router
 from app.api.fetch import router as fetch_router
@@ -10,7 +13,6 @@ from app.api.stats import router as stats_router
 from app.api.tenders import router as tenders_router
 from app.config import get_settings
 from app.database import engine, run_startup_migrations
-from backfill_links import backfill_bad_links
 
 settings = get_settings()
 
@@ -19,9 +21,8 @@ settings = get_settings()
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     try:
         await run_startup_migrations()
-        await backfill_bad_links()
     except Exception as exc:
-        print(f"startup migration/backfill skipped: {exc}")
+        print(f"startup migration skipped: {exc}")
     yield
     await engine.dispose()
 
@@ -45,6 +46,20 @@ app.include_router(tenders_router, prefix="/api/tenders", tags=["tenders"])
 app.include_router(alerts_router, prefix="/api/alerts", tags=["alerts"])
 app.include_router(stats_router, prefix="/api/stats", tags=["stats"])
 app.include_router(fetch_router, prefix="/api/fetch", tags=["fetch"])
+
+
+@app.exception_handler(asyncpg.PostgresError)
+@app.exception_handler(SQLAlchemyError)
+@app.exception_handler(OSError)
+async def database_unavailable_handler(
+    request: Request, exc: Exception
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=503,
+        content={
+            "detail": "Database is unavailable. Check DATABASE_URL and database connectivity."
+        },
+    )
 
 
 @app.get("/health")

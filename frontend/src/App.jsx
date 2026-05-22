@@ -107,16 +107,7 @@ export default function App() {
           color: "var(--muted)",
         }}
       >
-        Data sourced from{" "}
-        <a href="https://eprocure.gov.in" target="_blank" rel="noreferrer" style={{ color: "var(--muted)", textDecoration: "underline" }}>
-          CPPP
-        </a>
-        {" · "}
-        <a href="https://gem.gov.in" target="_blank" rel="noreferrer" style={{ color: "var(--muted)", textDecoration: "underline" }}>
-          GeM
-        </a>
-        {" · "}State Portals
-        {" · "}Updated every 6 hours{" · "}Always free
+        Printing tender listings updated every 6 hours{" · "}Always free
       </footer>
 
       {/* ── FAB ──────────────────────────────────────────────── */}

@@ -44,8 +44,6 @@ GENERIC_HOMEPAGE_URLS: frozenset[str] = frozenset(
         "https://bidassist.com/tenders",
         "https://www.bidassist.com",
         "https://www.bidassist.com/tenders",
-        "https://tendertiger.com",
-        "https://www.tendertiger.com",
         "https://mpbse.nic.in",
         "https://mpforest.gov.in",
         "https://mpforest.gov.in/tenders",
@@ -73,6 +71,7 @@ TENDER_IDENTIFIER_RE = re.compile(
 NIC_PORTAL_HOSTS = frozenset(urlparse(base).netloc for base in NIC_PORTAL_BASES.values())
 NIC_DIRECT_SP_RE = re.compile(r"[?&]sp=S[^&\s\"']+", flags=re.IGNORECASE)
 GEM_ALL_BIDS_URL = "https://bidplus.gem.gov.in/all-bids"
+GEM_DOCUMENT_PATH_RE = re.compile(r"(?:^|/)showbidDocument/\d+(?:[?#].*)?$", flags=re.IGNORECASE)
 
 
 def is_generic_link(url: str | None) -> bool:
@@ -114,6 +113,16 @@ def is_generic_homepage_url(url: str | None) -> bool:
     return is_generic_link(url)
 
 
+def is_document_download_link(url: str | None) -> bool:
+    cleaned = (url or "").strip()
+    if not cleaned:
+        return False
+    parsed = urlparse(cleaned)
+    return parsed.netloc.endswith("bidplus.gem.gov.in") and GEM_DOCUMENT_PATH_RE.search(
+        parsed.path
+    ) is not None
+
+
 def build_deep_link(portal: str, ref_number: str, tender_id: str | None = None) -> str:
     portal_name = (portal or "").strip()
     ref = (ref_number or "").strip()
@@ -133,6 +142,8 @@ def build_deep_link(portal: str, ref_number: str, tender_id: str | None = None) 
         )
         if direct_href:
             return direct_href
+        if ref:
+            return f"{GEM_ALL_BIDS_URL}?search_bid={quote_plus(ref)}"
         return GEM_ALL_BIDS_URL
 
     if portal_name in {"TenderDekho", "Tender Dekho"}:
@@ -147,13 +158,6 @@ def build_deep_link(portal: str, ref_number: str, tender_id: str | None = None) 
         if ref:
             return (
                 f"https://www.google.com/search?q={quote_plus(ref)}+site:bidassist.com"
-            )
-
-    if portal_name in {"TenderTiger", "Tender Tiger"}:
-        if ref:
-            return (
-                "https://global.tendertiger.com/quicksearch.aspx"
-                f"?SerText={quote_plus(ref)}&st=qs"
             )
 
     query = f"{ref} tender".strip() or "government tender"
@@ -238,16 +242,12 @@ def _is_aggregator_listing(netloc: str, path: str) -> bool:
             or lowered_path.endswith("-tender/active")
             or lowered_path.endswith("-tenders/active")
         )
-    if host.endswith("tendertiger.com"):
-        return lowered_path in {"tenderai/tenderailist", "quicksearch.aspx", "search"}
     return False
 
 
 def _is_aggregator_detail(netloc: str, path: str) -> bool:
     host = netloc.casefold()
     lowered_path = path.casefold().strip("/")
-    if host.endswith("tendertiger.com"):
-        return "detail" in lowered_path and len(lowered_path) > len("detail")
     if host.endswith("bidassist.com"):
         return "/detail-" in f"/{lowered_path}"
     if host.endswith("tenderdekho.com"):

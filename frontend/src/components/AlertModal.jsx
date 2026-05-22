@@ -7,14 +7,20 @@ import { useToastStore } from "../store/toastStore.js";
 const BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
 
 const KEYWORDS = [
-  "printing", "offset printing", "digital printing", "stationery",
-  "packaging", "security printing", "textbook", "calendar",
-  "toner", "booklet", "brochures", "labels",
+  "calendars", "diary", "sticker", "registers",
+  "books", "forms", "papers", "note books",
+  "brochures", "flyers", "visiting cards", "certificates",
+  "receipt books", "prospectus", "catalogues", "pass books",
+  "duplex box", "cards", "answer books", "exercise books",
+  "tags", "posters", "banners", "labels",
+  "desk pads", "envelopes", "marks sheet", "stationary",
+  "note sheets", "files", "pamphlets", "annual reports",
+  "souvenir",
 ];
 
 export default function AlertModal({ open, onClose, prefillKeyword }) {
   const [email, setEmail] = useState("");
-  const [keywords, setKeywords] = useState([prefillKeyword ?? "printing"]);
+  const [keywords, setKeywords] = useState([prefillKeyword ?? "calendars"]);
   const [frequency, setFrequency] = useState("daily");
   const [status, setStatus] = useState("idle");
   const [emailErr, setEmailErr] = useState("");

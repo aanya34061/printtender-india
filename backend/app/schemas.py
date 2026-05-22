@@ -52,7 +52,7 @@ class TenderBase(BaseModel):
     @classmethod
     def default_link_type(cls, value: object) -> str:
         text = str(value or "").strip()
-        return text if text in {"direct", "deep", "search"} else "search"
+        return text if text in {"direct", "deep", "search", "newspaper"} else "search"
 
     @property
     def external_id(self) -> str:
@@ -134,7 +134,9 @@ class FetchLogRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
-    portal: str | None = None
+    source: str | None = Field(
+        default=None, validation_alias=AliasChoices("source", "portal")
+    )
     keyword_used: str | None = None
     fetched_at: datetime | None = None
     tenders_found: int = 0
@@ -147,6 +149,8 @@ class StatsResponse(BaseModel):
     total_active: int
     tenders_today: int
     portals_count: int
+    by_portal: dict[str, int] = Field(default_factory=dict)
+    by_source_category: dict[str, int] = Field(default_factory=dict)
     last_fetch: datetime | None
     keywords_tracked: int
 

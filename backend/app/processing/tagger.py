@@ -1,4 +1,4 @@
-from app.fetchers.base import PRINT_KEYWORDS
+from app.keywords import IMAGE_PRODUCT_KEYWORDS
 from app.processing.deduplicator import deduplicate
 from app.processing.normaliser import normalise
 
@@ -40,4 +40,8 @@ def pipeline(raw: list[dict]) -> list[dict]:
 
 def tag_printing_keywords(text: str) -> list[str]:
     normalized = text.casefold()
-    return [keyword for keyword in PRINT_KEYWORDS if keyword.casefold() in normalized]
+    return [
+        keyword
+        for keyword in IMAGE_PRODUCT_KEYWORDS
+        if keyword.casefold() in normalized
+    ]

@@ -24,11 +24,6 @@ const KEYWORD_GROUPS = [
     keywords: ["labels", "tags", "sticker", "envelopes", "duplex box", "desk pads", "files"],
   },
   {
-    icon: "🖨️",
-    label: "Print Types",
-    keywords: ["offset printing", "digital printing", "security printing", "flex printing", "screen printing", "letterpress"],
-  },
-  {
     icon: "🎁",
     label: "Specialty",
     keywords: ["diary", "calendars", "cards", "marks sheet", "stationary"],
@@ -85,7 +80,7 @@ export default function HeroSearch() {
           <span className="text-gradient">Printing Tenders</span>
         </h1>
         <p className="mt-3 text-sm" style={{ color: "var(--muted)" }}>
-          Live data from CPPP · GeM · State Portals — updated every 6 hours
+          Live printing tender data - updated every 6 hours
         </p>
       </div>
 

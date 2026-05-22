@@ -7,17 +7,10 @@ from sqlalchemy.dialects.postgresql import insert
 from app.config import get_settings
 from app.database import async_session
 from app.email_service import send_tender_alert_email
-from app.fetchers.aggregators import (
-    scrape_bidassist,
-    scrape_eprocure_search,
-    scrape_tenderdekho,
-    scrape_tendertiger,
-)
-from app.fetchers.cppp import CPPPFetcher, scrape_cppp_mp
+from app.fetchers.aggregators import scrape_bidassist, scrape_tenderdekho
+from app.fetchers.cppp import CPPPFetcher
 from app.fetchers.gem import GeMFetcher
 from app.fetchers.mp_portals import (
-    MP_PRINT_KEYWORDS,
-    scrape_gem_mp_async,
     scrape_mp_forest,
     scrape_mp_info,
     scrape_mp_pwd,
@@ -25,10 +18,44 @@ from app.fetchers.mp_portals import (
     scrape_mpbse,
 )
 from app.fetchers.state import StateFetcher
+from app.keywords import IMAGE_PRODUCT_KEYWORDS, PRINT_KEYWORDS
 from app.models import AlertSubscription, FetchLog, Tender
 from app.processing.deduplicator import deduplicate_tenders
 from app.processing.normaliser import normalise_tender
+from app.sources import ACTIVE_TENDER_SOURCES
 from app.tasks.celery_app import celery_app
+
+
+def _scrape_cppp(keyword: str) -> list[dict]:
+    return CPPPFetcher().fetch(keyword)
+
+
+def _scrape_gem(keyword: str) -> list[dict]:
+    return GeMFetcher().fetch(keyword)
+
+
+def _scrape_state(state_code: str):
+    def scraper(keyword: str) -> list[dict]:
+        return StateFetcher().fetch(keyword, state_code)
+
+    return scraper
+
+
+PORTAL_SCRAPERS = (
+    ("CPPP", _scrape_cppp, PRINT_KEYWORDS),
+    ("GeM", _scrape_gem, PRINT_KEYWORDS),
+    ("MP Tenders", scrape_mp_tenders, IMAGE_PRODUCT_KEYWORDS),
+    ("MP PWD", scrape_mp_pwd, PRINT_KEYWORDS),
+    ("MPBSE", scrape_mpbse, PRINT_KEYWORDS),
+    ("MP Forest", scrape_mp_forest, PRINT_KEYWORDS),
+    ("MP Info", scrape_mp_info, PRINT_KEYWORDS),
+    ("State-MP", _scrape_state("MP"), PRINT_KEYWORDS),
+    ("State-UP", _scrape_state("UP"), PRINT_KEYWORDS),
+    ("Maharashtra Tenders", _scrape_state("MH"), PRINT_KEYWORDS),
+    ("State-RJ", _scrape_state("RJ"), PRINT_KEYWORDS),
+    ("TenderDekho", scrape_tenderdekho, PRINT_KEYWORDS),
+    ("BidAssist", scrape_bidassist, PRINT_KEYWORDS),
+)
 
 
 async def _upsert_tenders(tenders: list) -> list[int]:
@@ -70,12 +97,12 @@ async def _upsert_tenders(tenders: list) -> list[int]:
 
 
 async def _log_fetch(
-    portal: str, found: int, status: str, error: str | None = None
+    source: str, found: int, status: str, error: str | None = None
 ) -> None:
     async with async_session() as session:
         session.add(
             FetchLog(
-                portal=portal,
+                portal=source,
                 fetched_at=datetime.now(timezone.utc),
                 tenders_found=found,
                 new_added=0,
@@ -86,72 +113,47 @@ async def _log_fetch(
         await session.commit()
 
 
-def _fetch_by_source(
-    label: str, fetcher_fn: "callable"
-) -> tuple[str, list, str | None]:
-    try:
-        raw = fetcher_fn()
-        return label, raw, None
-    except Exception as exc:
-        return label, [], str(exc)
-
-
 async def run_fetch_cycle() -> int:
+    """
+    Run fetch cycle across all sources. Parallelise IO-bound synchronous scrapers using
+    asyncio.to_thread and run async scrapers concurrently where possible. Add timeouts
+    and semaphores to prevent slow/hanging scrapers from blocking the whole cycle.
+    """
+
     all_raw: list = []
 
-    # CPPP — synchronous XML fetcher
-    _, cppp_raw, cppp_err = _fetch_by_source(
-        "CPPP", lambda: CPPPFetcher().fetch_all_keywords()
-    )
-    all_raw.extend(cppp_raw)
-    await _log_fetch(
-        "CPPP", len(cppp_raw), "ok" if cppp_err is None else "error", cppp_err
-    )
+    # limit concurrent thread-based scrapers
+    sem_sync = asyncio.Semaphore(6)
 
-    # GeM — Playwright (async); call _fetch_async directly to avoid asyncio.run() conflict
-    gem = GeMFetcher()
-    for keyword in gem.keywords:
+    async def _run_sync_and_log(label: str, func, *args):
         try:
-            raw = await gem._fetch_async(keyword)
-            all_raw.extend(raw)
-            await _log_fetch("GeM", len(raw), "ok")
+            async with sem_sync:
+                if args:
+                    raw = await asyncio.wait_for(
+                        asyncio.to_thread(func, *args), timeout=30
+                    )
+                else:
+                    raw = await asyncio.wait_for(
+                        asyncio.to_thread(func), timeout=30
+                    )
+            await _log_fetch(label, len(raw), "ok")
+            return label, raw
+        except asyncio.TimeoutError:
+            await _log_fetch(label, 0, "error", "timeout")
+            return label, []
         except Exception as exc:
-            await _log_fetch("GeM", 0, "error", str(exc))
+            await _log_fetch(label, 0, "error", str(exc))
+            return label, []
 
-    # State portals — synchronous HTTP fetcher (all keywords × all states)
-    _, state_raw, state_err = _fetch_by_source(
-        "State", lambda: StateFetcher().fetch_all()
-    )
-    all_raw.extend(state_raw)
-    await _log_fetch(
-        "State", len(state_raw), "ok" if state_err is None else "error", state_err
-    )
+    tasks = []
 
-    mp_sync_scrapers = [
-        ("MP Tenders", scrape_mp_tenders),
-        ("MP PWD", scrape_mp_pwd),
-        ("CPPP MP", scrape_cppp_mp),
-        ("MPBSE", scrape_mpbse),
-        ("MP Forest", scrape_mp_forest),
-        ("MP Info", scrape_mp_info),
-    ]
-    for keyword in MP_PRINT_KEYWORDS:
-        for label, scraper in mp_sync_scrapers:
-            portal_label, raw, err = _fetch_by_source(
-                label, lambda s=scraper, k=keyword: s(k)
+    for label, scraper, keywords in PORTAL_SCRAPERS:
+        for keyword in keywords:
+            tasks.append(
+                asyncio.create_task(_run_sync_and_log(label, scraper, keyword))
             )
-            all_raw.extend(raw)
-            await _log_fetch(
-                portal_label, len(raw), "ok" if err is None else "error", err
-            )
-        try:
-            gem_mp_raw = await scrape_gem_mp_async(keyword)
-            all_raw.extend(gem_mp_raw)
-            await _log_fetch("GeM MP", len(gem_mp_raw), "ok")
-        except Exception as exc:
-            await _log_fetch("GeM MP", 0, "error", str(exc))
 
-    # Newspaper scrapers (text-based) — run with the same keywords used for MP portals
+    # Newspaper/notice scrapers remain active without exposing source filters in the UI.
     from app.fetchers.newspapers import (
         scrape_toi,
         scrape_ht,
@@ -184,49 +186,37 @@ async def run_fetch_cycle() -> int:
         ("Public Notice India", scrape_publicnotice),
     ]
 
-    for keyword in MP_PRINT_KEYWORDS:
+    for keyword in PRINT_KEYWORDS:
         for label, scraper in newspaper_scrapers:
-            portal_label, raw, err = _fetch_by_source(label, lambda s=scraper, k=keyword: s(k))
-            all_raw.extend(raw)
-            await _log_fetch(portal_label, len(raw), "ok" if err is None else "error", err)
+            # shorter timeout for lightweight newspaper scrapers
+            tasks.append(
+                asyncio.create_task(_run_sync_and_log(label, scraper, keyword))
+            )
 
-    # Run OCR-based epaper scraping once daily at 08:00 UTC+5:30 (approx local 8 AM); optional
+    # Optional OCR epaper (run in thread)
     try:
         from app.fetchers.epaper_ocr import scrape_epapers_for_mp
+
         now = datetime.now(timezone.utc)
-        # crude local 8 AM check (server tz may vary) — only attempt when hour==2 (UTC) which is 7:30 IST
         if now.hour == 2:
-            try:
-                ocr_raw = scrape_epapers_for_mp("printing")
-                all_raw.extend(ocr_raw)
-                await _log_fetch("Epaper OCR", len(ocr_raw), "ok")
-            except Exception as exc:
-                await _log_fetch("Epaper OCR", 0, "error", str(exc))
+            tasks.append(
+                asyncio.create_task(
+                    _run_sync_and_log(
+                        "Epaper OCR", lambda: scrape_epapers_for_mp("printing")
+                    )
+                )
+            )
     except Exception:
-        # OCR module optional — ignore if not present
         pass
 
-    aggregator_scrapers = [
-        ("TenderTiger", scrape_tendertiger),
-        ("TenderDekho", scrape_tenderdekho),
-        ("BidAssist", scrape_bidassist),
-        ("CPPP Search", scrape_eprocure_search),
-    ]
-    aggregator_counts = {label: 0 for label, _ in aggregator_scrapers}
-    for keyword in gem.keywords:
-        for label, scraper in aggregator_scrapers:
-            portal_label, raw, err = _fetch_by_source(
-                label, lambda s=scraper, k=keyword: s(k)
-            )
-            all_raw.extend(raw)
-            aggregator_counts[label] += len(raw)
-            await _log_fetch(
-                portal_label, len(raw), "ok" if err is None else "error", err
-            )
-    for label, found in aggregator_counts.items():
-        print(f"fetch_cycle_source portal={label} found={found}")
+    # Await all tasks and collect results
+    results = await asyncio.gather(*tasks)
+    for _label, raw in results:
+        all_raw.extend(raw or [])
 
-    tenders = deduplicate_tenders([normalise_tender(r) for r in all_raw])
+    # Deduplicate, normalise and upsert
+    normalised = [normalise_tender(r) for r in all_raw]
+    tenders = deduplicate_tenders([tender for tender in normalised if tender is not None])
     new_ids = await _upsert_tenders(tenders)
     alert_count = await send_matching_alerts(new_ids)
     print(
@@ -243,7 +233,9 @@ async def send_matching_alerts(new_tender_ids: list[int]) -> int:
     now = datetime.now(timezone.utc)
     async with async_session() as session:
         tender_rows = await session.scalars(
-            select(Tender).where(Tender.id.in_(new_tender_ids))
+            select(Tender)
+            .where(Tender.id.in_(new_tender_ids))
+            .where(Tender.portal_source.in_(ACTIVE_TENDER_SOURCES))
         )
         tenders = list(tender_rows)
         if not tenders:

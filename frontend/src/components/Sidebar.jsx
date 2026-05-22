@@ -11,11 +11,21 @@ const BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
 function portalColor(name) {
   if (name === "CPPP") return "#3b82f6";
   if (name === "GeM") return "#22c55e";
-  if (["MP Tenders", "MP PWD", "MPBSE", "MP Forest", "MP Info", "State-MP"].includes(name)) return "#f97316";
+  if ([
+    "MP Tenders",
+    "MP PWD",
+    "MPBSE",
+    "MP Forest",
+    "MP Info",
+    "State-MP",
+    "State-UP",
+    "State-MH",
+    "Maharashtra Tenders",
+    "State-RJ",
+  ].includes(name)) return "#f97316";
   if (name === "TenderTiger") return "#a855f7";
   if (name === "TenderDekho") return "#14b8a6";
   if (name === "BidAssist") return "#eab308";
-  // Newspaper sources - use red
   if ([
     "TOI Tenders",
     "HT Tenders",
@@ -39,7 +49,7 @@ function useExpiringSoon() {
     queryKey: ["expiring-soon"],
     queryFn: async () => {
       const { data } = await axios.get(`${BASE}/api/tenders`, {
-        params: { q: "printing", deadline_within_days: 3, limit: 5, sort: "deadline_asc" },
+        params: { deadline_within_days: 3, limit: 5, sort: "deadline_asc" },
       });
       return data.tenders ?? [];
     },
@@ -95,18 +105,18 @@ export default function Sidebar({ bookmarks, onView }) {
               <button
                 key={d.name}
                 type="button"
-                onClick={() => { setPortal(d.name); setQ("printing"); }}
+                onClick={() => { setPortal(d.name); setQ(""); }}
                 className="flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-xs transition"
                 style={{ color: "var(--muted)" }}
                 onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(249,115,22,0.08)"; e.currentTarget.style.color = "var(--accent)"; }}
                 onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "var(--muted)"; }}
                 title={`Show ${d.name} tenders`}
               >
-                <span className="flex items-center gap-1.5">
-                  <span className="h-2 w-2 rounded-full" style={{ background: portalColor(d.name) }} />
-                  {d.name}
+                <span className="flex min-w-0 items-center gap-1.5">
+                  <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: portalColor(d.name) }} />
+                  <span className="truncate">{d.name}</span>
                 </span>
-                <span className="font-semibold" style={{ color: portalColor(d.name) }}>{d.value} →</span>
+                <span className="shrink-0 font-semibold" style={{ color: portalColor(d.name) }}>{d.value} →</span>
               </button>
             ))}
           </div>

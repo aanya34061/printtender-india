@@ -56,45 +56,10 @@ STATE_NAMES = (
 )
 
 DOC_LINK_RE = re.compile(r"\.(pdf|doc|docx|xls|xlsx)(?:$|[?#])", flags=re.IGNORECASE)
+BRACKETED_TENDER_RE = re.compile(
+    r"^\[(?P<title>.*?)\]\s*\[(?P<ref>.*?)\]\[(?P<tender_id>.*?)\]\s*$"
+)
 
-
-def scrape_tendertiger(keyword: str) -> list[dict]:
-    urls = [
-        (
-            "https://www.tendertiger.com/Tender/TenderList",
-            {"searchtext": f"{keyword}-tenders"},
-        ),
-        (
-            "https://global.tendertiger.com/quicksearch.aspx",
-            {"SerText": keyword, "st": "qs"},
-        ),
-        (
-            "https://www.tendertiger.com/TenderAI/TenderAIList",
-            {"searchtext": f"{keyword} tenders"},
-        ),
-    ]
-    tenders = _scrape_aggregator(
-        keyword=keyword,
-        portal_source="TenderTiger",
-        urls=urls,
-        link_predicate=_is_tendertiger_detail_link,
-        log=False,
-    )
-    error = None
-    if not tenders:
-        try:
-            tenders = _run_async(_scrape_tendertiger_browser(keyword))
-        except Exception as exc:
-            error = str(exc)
-    _builder.log_result(
-        "TenderTiger",
-        keyword,
-        len(tenders),
-        len(tenders),
-        "success" if error is None else "error",
-        error,
-    )
-    return tenders
 
 
 def scrape_tenderdekho(keyword: str) -> list[dict]:
@@ -127,6 +92,27 @@ def scrape_bidassist(keyword: str) -> list[dict]:
 
 def scrape_eprocure_search(keyword: str) -> list[dict]:
     url = "https://eprocure.gov.in/eprocure/app"
+    try:
+        html = _fetch_eprocure_html(url, keyword)
+    except Exception as exc:
+        _builder.log_result("CPPP Search", keyword, 0, 0, "error", str(exc))
+        return []
+
+    soup = BeautifulSoup(html, "lxml")
+    tenders: list[dict] = []
+    rows = soup.select("table.list_table > tr")
+    if not rows:
+        rows = soup.select("table.list_table tr")
+    for row in rows:
+        record = _record_from_eprocure_row(row, keyword, url)
+        if record:
+            tenders.append(record)
+    tenders = _dedupe_by_ref(tenders)
+    _builder.log_result("CPPP Search", keyword, len(tenders), len(tenders), "success")
+    return tenders
+
+
+def _fetch_eprocure_html(url: str, keyword: str) -> str:
     params = {
         "page": "FrontEndTendersByKeyword",
         "service": "page",
@@ -134,21 +120,26 @@ def scrape_eprocure_search(keyword: str) -> list[dict]:
         "searchBy": "0",
         "searchDateType": "TD",
     }
-    try:
-        html = _fetch_html(url, params=params)
-    except Exception as exc:
-        _builder.log_result("CPPP Search", keyword, 0, 0, "error", str(exc))
-        return []
+    _builder.wait_between_requests()
+    headers = {
+        **REQUEST_HEADERS,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-IN,en;q=0.9",
+    }
+    with httpx.Client(timeout=30, follow_redirects=True, headers=headers) as client:
+        response = client.get(url, params=params)
+        response.raise_for_status()
+        if not _requires_form_search(response.text):
+            return response.text
 
-    soup = BeautifulSoup(html, "lxml")
-    tenders: list[dict] = []
-    for row in soup.select("table.list_table tr, table tr"):
-        record = _record_from_eprocure_row(row, keyword, url)
-        if record:
-            tenders.append(record)
-    tenders = _dedupe_by_ref(tenders)
-    _builder.log_result("CPPP Search", keyword, len(tenders), len(tenders), "success")
-    return tenders
+        home = client.get(url)
+        home.raise_for_status()
+        payload = _extract_search_form(home.text)
+        payload["SearchDescription"] = keyword
+        payload["Go"] = payload.get("Go") or "Go"
+        form_response = client.post(url, data=payload)
+        form_response.raise_for_status()
+        return form_response.text
 
 
 def _scrape_aggregator(
@@ -194,64 +185,7 @@ def _scrape_aggregator(
     return tenders
 
 
-async def _scrape_tendertiger_browser(keyword: str) -> list[dict]:
-    url = f"https://www.tendertiger.com/Tender/TenderList?searchtext={quote_plus(keyword)}-tenders"
-    await asyncio.sleep(random.uniform(2, 4))
-    async with async_playwright() as playwright:
-        browser = await playwright.chromium.launch(headless=True)
-        try:
-            page = await browser.new_page(
-                user_agent=REQUEST_HEADERS["User-Agent"],
-                extra_http_headers={"Accept-Language": "en-IN,en;q=0.9"},
-            )
-            await page.goto(url, wait_until="domcontentloaded", timeout=60000)
-            try:
-                await page.wait_for_selector(
-                    "a[href*='TenderDetail/Tenderinformation']", timeout=15000
-                )
-            except Exception:
-                return []
-            rows = await page.locator(
-                "a[href*='TenderDetail/Tenderinformation']"
-            ).evaluate_all(
-                """(anchors) => anchors.slice(0, 25).map((anchor) => {
-                    const card = anchor.closest('.tender-listing')
-                        || anchor.closest('tr')
-                        || anchor.parentElement;
-                    return {
-                        title: anchor.textContent || '',
-                        href: anchor.href,
-                        text: card ? card.innerText : anchor.textContent || ''
-                    };
-                })"""
-            )
-        finally:
-            await browser.close()
 
-    tenders: list[dict] = []
-    for row in rows:
-        portal_url = str(row.get("href") or "").strip()
-        title = _clean_title(str(row.get("title") or ""))
-        context = " ".join(str(row.get("text") or "").split())
-        if not portal_url or not title or is_generic_link(portal_url):
-            continue
-        ref_number = _extract_ref(context) or _stable_ref("TenderTiger", portal_url)
-        tenders.append(
-            _builder.build_record(
-                ref_number=ref_number,
-                title=title,
-                organisation=_extract_organisation(context, title),
-                state=_extract_state(context),
-                portal_source="TenderTiger",
-                deadline_raw=_extract_deadline(context),
-                value_raw=_extract_value(context),
-                portal_url=portal_url,
-                keyword_hit=keyword,
-                tender_id=_slug_from_url(portal_url),
-                link_verified=True,
-            )
-        )
-    return _dedupe_by_ref(tenders)
 
 
 def _run_async(coro):
@@ -289,6 +223,26 @@ def _fetch_html(url: str, *, params: dict[str, str] | None = None) -> str:
         return response.text
 
 
+def _requires_form_search(html: str) -> bool:
+    compact = " ".join(html.split()).casefold()
+    return (
+        "your session in the client area has expired" in compact
+        or "click here to re-login" in compact
+    )
+
+
+def _extract_search_form(html: str) -> dict[str, str]:
+    soup = BeautifulSoup(html, "lxml")
+    form = soup.find("form", {"id": "tenderSearch"})
+    if form is None:
+        raise RuntimeError("eProcure search form not found")
+    return {
+        str(field.get("name")): str(field.get("value") or "")
+        for field in form.find_all("input")
+        if field.get("name")
+    }
+
+
 def _records_from_detail_links(
     *,
     soup: BeautifulSoup,
@@ -310,24 +264,35 @@ def _records_from_detail_links(
             continue
         seen_links.add(portal_url)
         context = _best_context_text(anchor)
-        title = _clean_title(anchor.get_text(" ", strip=True)) or _title_from_context(
-            context
+        detail_context = _detail_page_context(portal_url, portal_source)
+        effective_context = " ".join(
+            part for part in (context, detail_context) if part
+        ).strip()
+        title = (
+            _detail_title(detail_context)
+            or _clean_title(anchor.get_text(" ", strip=True))
+            or _title_from_context(effective_context)
         )
         if not title:
             continue
+        if not (
+            _contains_keyword_phrase(title, keyword)
+            or _contains_keyword_phrase(effective_context, keyword)
+        ):
+            continue
         tender_id = _slug_from_url(portal_url)
-        ref_number = _extract_ref(context) or tender_id or _stable_ref(
+        ref_number = _extract_ref(effective_context) or tender_id or _stable_ref(
             portal_source, portal_url
         )
         tenders.append(
             _builder.build_record(
                 ref_number=ref_number,
                 title=title,
-                organisation=_extract_organisation(context, title),
-                state=_extract_state(context),
+                organisation=_extract_organisation(effective_context, title),
+                state=_extract_state(effective_context),
                 portal_source=portal_source,
-                deadline_raw=_extract_deadline(context),
-                value_raw=_extract_value(context),
+                deadline_raw=_extract_deadline(effective_context),
+                value_raw=_extract_value(effective_context),
                 portal_url=portal_url,
                 keyword_hit=keyword,
                 tender_id=tender_id,
@@ -339,7 +304,11 @@ def _records_from_detail_links(
 
 def _record_from_eprocure_row(row: Tag, keyword: str, base_url: str) -> dict | None:
     columns = row.find_all("td")
-    if len(columns) < 2:
+    if len(columns) < 6:
+        return None
+
+    first_col = _cell_text(columns, 0).rstrip(".")
+    if not first_col.isdigit():
         return None
 
     row_text = row.get_text(" ", strip=True)
@@ -355,8 +324,9 @@ def _record_from_eprocure_row(row: Tag, keyword: str, base_url: str) -> dict | N
     if not direct_url:
         return None
 
-    ref_number = _cell_text(columns, 1) or _extract_ref(row_text)
-    title = _cell_text(columns, 2) or _title_from_context(row_text)
+    title_cell = _cell_text(columns, 4)
+    title, ref_number, parsed_tender_id = _parse_bracketed_tender(title_cell)
+    tender_id = tender_id or parsed_tender_id
     if not ref_number and tender_id:
         ref_number = tender_id
     if not ref_number or not title:
@@ -366,29 +336,15 @@ def _record_from_eprocure_row(row: Tag, keyword: str, base_url: str) -> dict | N
     return _builder.build_record(
         ref_number=ref_number,
         title=title,
-        organisation=_cell_text(columns, 3) or _extract_organisation(row_text, title),
+        organisation=_cell_text(columns, 5) or _extract_organisation(row_text, title),
         state=_extract_state(row_text),
         portal_source="CPPP",
-        deadline_raw=_cell_text(columns, 4) or _extract_deadline(row_text),
-        value_raw=_cell_text(columns, 5) or _extract_value(row_text),
+        deadline_raw=_cell_text(columns, 2) or _extract_deadline(row_text),
+        value_raw=_extract_value(row_text),
         portal_url=portal_url,
         keyword_hit=keyword,
         tender_id=tender_id,
         link_verified=bool(direct_url),
-    )
-
-
-def _is_tendertiger_detail_link(url: str) -> bool:
-    parsed = urlparse(url)
-    host = parsed.netloc.casefold()
-    path = parsed.path.casefold()
-    return (
-        "tendertiger.com" in host
-        and (
-            "/tenderdetail/" in path
-            or "/tenderdetail" in path
-            or "tenderdetailbrief" in path
-        )
     )
 
 
@@ -466,8 +422,9 @@ def _extract_state(text: str) -> str | None:
 
 def _extract_deadline(text: str) -> str | None:
     patterns = (
-        r"(?:Closing Date|Due Date|Deadline|Bid End Date)\s*:?\s*([0-9]{1,2}\s+[A-Za-z]{3,9}\s+[0-9]{4})",
-        r"(?:Closing Date|Due Date|Deadline|Bid End Date)\s*:?\s*([0-9]{1,2}[-/][0-9]{1,2}[-/][0-9]{2,4})",
+        r"(?:Closing Date|Due Date|Deadline|Bid End Date|Last Date)\s*:?\s*([0-9]{1,2}\s+[A-Za-z]{3,9},?\s+[0-9]{4})",
+        r"(?:Closing Date|Due Date|Deadline|Bid End Date|Last Date)\s*:?\s*([0-9]{1,2}[-/.][0-9]{1,2}[-/.][0-9]{2,4})",
+        r"(?:Closing Date|Due Date|Deadline|Bid End Date|Last Date)\s*:?\s*([0-9]{1,2}-[A-Za-z]{3,9}-[0-9]{4})",
         r"\b[0-9]{1,2}\s+[A-Za-z]{3,9}\s+[0-9]{4}\b",
     )
     for pattern in patterns:
@@ -475,6 +432,19 @@ def _extract_deadline(text: str) -> str | None:
         if match:
             return match.group(1) if match.lastindex else match.group(0)
     return None
+
+
+def _contains_keyword_phrase(text: str, keyword: str) -> bool:
+    normalized = " ".join(text.casefold().split())
+    term = " ".join(keyword.casefold().split())
+    if not normalized or not term:
+        return False
+    if any(ord(char) > 127 for char in term):
+        return term in normalized
+
+    escaped = re.escape(term).replace(r"\ ", r"\s+")
+    pattern = rf"(?<![a-z0-9]){escaped}(?![a-z0-9])"
+    return re.search(pattern, normalized) is not None
 
 
 def _extract_value(text: str) -> str | None:
@@ -498,10 +468,67 @@ def _extract_label(text: str, labels: tuple[str, ...]) -> str | None:
     return None
 
 
+def _detail_page_context(url: str, portal_source: str) -> str:
+    if portal_source != "BidAssist":
+        return ""
+    try:
+        html = _fetch_html(url)
+    except Exception:
+        return ""
+    soup = BeautifulSoup(html, "lxml")
+    parts: list[str] = []
+    for selector in (
+        'meta[name="description"]',
+        'meta[property="og:description"]',
+        'meta[property="og:title"]',
+        "title",
+    ):
+        node = soup.select_one(selector)
+        if node is None:
+            continue
+        if node.name == "meta":
+            value = node.get("content")
+        else:
+            value = node.get_text(" ", strip=True)
+        cleaned = " ".join(str(value or "").split()).strip()
+        if cleaned:
+            parts.append(cleaned)
+    return " ".join(dict.fromkeys(parts))
+
+
+def _detail_title(detail_context: str) -> str | None:
+    compact = " ".join((detail_context or "").split())
+    if not compact:
+        return None
+    match = re.search(
+        r"content=\"([^\"]+?)\s*\|\s*Closing Date",
+        detail_context,
+        flags=re.IGNORECASE,
+    )
+    if match:
+        return match.group(1).strip(" -|")
+    if "| Closing Date" in compact:
+        return compact.split("| Closing Date", 1)[0].strip(" -|")
+    return None
+
+
 def _slug_from_url(url: str) -> str | None:
     path = urlparse(url).path.rstrip("/")
     slug = path.rsplit("/", 1)[-1]
     return slug or None
+
+
+def _parse_bracketed_tender(text: str) -> tuple[str, str, str | None]:
+    compact = " ".join(text.split())
+    match = BRACKETED_TENDER_RE.match(compact)
+    if not match:
+        extracted_ref = _extract_ref(compact) or compact
+        return compact, extracted_ref, None
+    return (
+        match.group("title").strip(),
+        match.group("ref").strip(),
+        match.group("tender_id").strip() or None,
+    )
 
 
 def _stable_ref(portal_source: str, url: str) -> str:
@@ -532,5 +559,4 @@ __all__ = [
     "scrape_bidassist",
     "scrape_eprocure_search",
     "scrape_tenderdekho",
-    "scrape_tendertiger",
 ]

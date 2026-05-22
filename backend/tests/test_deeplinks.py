@@ -3,6 +3,7 @@ from app.fetchers.deeplinks import (
     build_deep_link,
     classify_link,
     extract_nic_tender_id,
+    is_document_download_link,
     is_generic_homepage_url,
     is_generic_link,
     resolve_link,
@@ -45,18 +46,24 @@ def test_gem_with_captured_document_id_uses_showbid_document():
 
 def test_gem_with_tender_id_does_not_construct_bid_details():
     link = build_deep_link("GeM", "GEM/2025/B/12345", "GEM-2025-B-12345")
-    assert link == "https://bidplus.gem.gov.in/all-bids"
+    assert link == "https://bidplus.gem.gov.in/all-bids?search_bid=GEM%2F2025%2FB%2F12345"
     assert "bid-details" not in link
 
 
 def test_gem_ref_without_tender_id_falls_back_to_all_bids():
     link = build_deep_link("GeM", "GEM/2025/B/99", None)
-    assert link == "https://bidplus.gem.gov.in/all-bids"
+    assert link == "https://bidplus.gem.gov.in/all-bids?search_bid=GEM%2F2025%2FB%2F99"
 
 
 def test_gem_without_ref_falls_back_to_all_bids():
     link = build_deep_link("GeM", "", None)
     assert link == "https://bidplus.gem.gov.in/all-bids"
+
+
+def test_gem_showbid_document_is_marked_as_download_link():
+    assert is_document_download_link(
+        "https://bidplus.gem.gov.in/showbidDocument/9217773"
+    )
 
 
 def test_gem_resolve_link_preserves_captured_direct_url():
