@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: printtender-api
+    runtime: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: APP_ENV
+        value: production
+      - key: ENABLE_FETCH_API
+        value: "false"
+      - key: FRONTEND_URL
+        sync: false
