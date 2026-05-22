@@ -28,7 +28,7 @@ settings = get_settings()
 engine = create_async_engine(
     _asyncpg_url(settings.DATABASE_URL),
     pool_pre_ping=True,
-    connect_args={"prepared_statement_cache_size": 0},
+    connect_args={"prepared_statement_cache_size": 0, "timeout": 10},
 )
 AsyncSessionLocal = async_sessionmaker(
     bind=engine, class_=AsyncSession, expire_on_commit=False

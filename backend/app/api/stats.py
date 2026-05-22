@@ -6,7 +6,6 @@ from sqlalchemy import distinct, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.fallback_mp import fallback_stats
 from app.models import AlertSubscription, FetchLog, Tender
 from app.sources import (
     ACTIVE_FETCH_SOURCES,
@@ -16,6 +15,12 @@ from app.sources import (
 )
 
 router = APIRouter()
+
+
+def fallback_stats():
+    from app.fallback_mp import fallback_stats as impl
+
+    return impl()
 
 
 @router.get("")
@@ -115,7 +120,7 @@ async def get_stats(session: AsyncSession = Depends(get_db)) -> dict:
             "portals_count": len(by_portal),
             "keywords_tracked": keywords_tracked,
         }
-    except (OSError, SQLAlchemyError):
+    except (OSError, SQLAlchemyError, TimeoutError):
         return fallback_stats()
     except Exception as exc:
         # Log exception to a file for debugging and re-raise

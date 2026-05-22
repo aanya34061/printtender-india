@@ -6,7 +6,6 @@ from sqlalchemy import Select, asc, desc, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.fallback_mp import get_fallback_tender, list_fallback_tenders
 from app.fetchers.deeplinks import (
     build_deep_link,
     classify_link,
@@ -26,6 +25,18 @@ from app.sources import (
 router = APIRouter()
 
 SortOption = Literal["deadline_asc", "newest", "value_desc", "value_asc"]
+
+
+def list_fallback_tenders(**kwargs):
+    from app.fallback_mp import list_fallback_tenders as impl
+
+    return impl(**kwargs)
+
+
+def get_fallback_tender(tender_id: int):
+    from app.fallback_mp import get_fallback_tender as impl
+
+    return impl(tender_id)
 
 
 def _serialize_tender(t: Tender) -> dict:
@@ -177,7 +188,7 @@ async def count_tenders(
     qry = _build_base(q, state, portal, deadline_within_days, min_value, max_value)
     try:
         count = await session.scalar(select(func.count()).select_from(qry.subquery())) or 0
-    except (OSError, SQLAlchemyError):
+    except (OSError, SQLAlchemyError, TimeoutError):
         from app.fallback_mp import count_fallback_tenders
 
         count = count_fallback_tenders(
@@ -217,7 +228,7 @@ async def list_tenders(
         tenders = [_serialize_tender(row) for row in rows]
         pages = max(1, -(-total // limit))
         return {"tenders": tenders, "total": total, "page": page, "pages": pages}
-    except (OSError, SQLAlchemyError):
+    except (OSError, SQLAlchemyError, TimeoutError):
         return list_fallback_tenders(
             q=q,
             state=state,
@@ -244,7 +255,7 @@ async def get_tender(
         return data
     except HTTPException:
         raise
-    except (OSError, SQLAlchemyError):
+    except (OSError, SQLAlchemyError, TimeoutError):
         tender = get_fallback_tender(tender_id)
         if tender is None:
             raise HTTPException(status_code=404, detail="Tender not found")

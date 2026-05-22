@@ -1,5 +1,6 @@
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+import asyncio
 
 import asyncpg
 from fastapi import FastAPI, Request
@@ -53,6 +54,7 @@ if settings.ENABLE_FETCH_API:
 @app.exception_handler(asyncpg.PostgresError)
 @app.exception_handler(SQLAlchemyError)
 @app.exception_handler(OSError)
+@app.exception_handler(asyncio.TimeoutError)
 async def database_unavailable_handler(
     request: Request, exc: Exception
 ) -> JSONResponse:
