@@ -1,4 +1,5 @@
 from collections.abc import AsyncGenerator
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy import text
@@ -8,9 +9,19 @@ from app.models import Base
 
 
 def _asyncpg_url(database_url: str) -> str:
-    if database_url.startswith("postgresql://"):
-        return database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
-    return database_url
+    url = (
+        database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+        if database_url.startswith("postgresql://")
+        else database_url
+    )
+    parts = urlsplit(url)
+    query = dict(parse_qsl(parts.query, keep_blank_values=True))
+    if query.get("sslmode") == "require":
+        query.pop("sslmode", None)
+        query["ssl"] = "require"
+    return urlunsplit(
+        (parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment)
+    )
 
 
 settings = get_settings()
