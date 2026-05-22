@@ -30,7 +30,6 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: celery -A app.tasks.celery_app.celery_app beat --loglevel=info
     schedule: "0 */6 * * *"
-    plan: free
     envVars:
       - fromGroup: printtender-env
 
