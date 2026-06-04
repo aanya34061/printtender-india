@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { useShallow } from "zustand/react/shallow";
 
 export const useFilterStore = create((set) => ({
   q: "",
@@ -31,3 +32,18 @@ export const useFilterStore = create((set) => ({
     set({ q: "", state: null, portal: null, categories: [], deadline_within_days: 30,
           min_value: null, max_value: null, sort: "deadline_asc", page: 1, limit: 6 }),
 }));
+
+export const useTenderFilters = () =>
+  useFilterStore(
+    useShallow((state) => ({
+      q: state.q,
+      state: state.state,
+      portal: state.portal,
+      deadline_within_days: state.deadline_within_days,
+      min_value: state.min_value,
+      max_value: state.max_value,
+      sort: state.sort,
+      page: state.page,
+      limit: state.limit,
+    })),
+  );

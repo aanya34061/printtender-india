@@ -6,6 +6,16 @@ import pytest
 import respx
 
 from app.fetchers.base import RESULT_KEYS
+from app.fetchers.banks import (
+    HTML_CACHE,
+    scrape_bank_of_india,
+    scrape_canara_bank,
+    scrape_central_bank,
+    scrape_indian_bank,
+    scrape_lic,
+    scrape_pnb,
+    scrape_uco_bank,
+)
 from app.fetchers.cppp import CPPPFetcher
 from app.fetchers.gem import (
     _pick_best_gem_href,
@@ -28,6 +38,7 @@ FIXTURES = Path(__file__).parent / "fixtures"
 @pytest.fixture(autouse=True)
 def no_delay(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("app.fetchers.base.time.sleep", lambda _seconds: None)
+    HTML_CACHE.clear()
 
 
 def assert_result_keys(tender: dict) -> None:
@@ -49,6 +60,24 @@ def test_cppp_fetch_returns_three_dicts_with_expected_keys() -> None:
     assert tenders[0]["ref_number"] == "CPPP-PRINT-001"
     assert tenders[0]["portal_source"] == "CPPP"
     assert tenders[0]["keyword_hit"] == "printing"
+
+
+def test_cppp_parse_xml_recovers_named_html_entities() -> None:
+    xml = """
+    <Resp>
+      <Tender>
+        <TenderRefNo>CPPP-ENT-001</TenderRefNo>
+        <TenderTitle>Printing &amp; supply of calendars&nbsp;for schools</TenderTitle>
+        <OrganisationName>Directorate of Printing</OrganisationName>
+        <BidEndDate>30-Jun-2026</BidEndDate>
+      </Tender>
+    </Resp>
+    """
+
+    tenders = CPPPFetcher().parse_xml(xml, "calendars")
+
+    assert len(tenders) == 1
+    assert tenders[0]["title"] == "Printing & supply of calendars\xa0for schools"
 
 
 @respx.mock
@@ -167,6 +196,113 @@ def test_mp_tenders_falls_back_to_legacy_form_when_keyword_page_is_empty(
     posted = parse_qs(post_route.calls[0].request.content.decode())
     assert posted["SearchDescription"] == ["calendars"]
     assert len(tenders) == 1
+
+
+@respx.mock
+def test_mp_tenders_ignores_legacy_page_chrome_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("app.fetchers.mp_portals.time.sleep", lambda _seconds: None)
+    home = """
+    <form method="post" action="/nicgep/app" id="tenderSearch">
+      <input type="hidden" name="component" value="$WebHomeBorder.$WebTenderSearch.tenderSearch" />
+      <input type="hidden" name="page" value="Home" />
+      <input type="hidden" name="service" value="direct" />
+      <input type="hidden" name="session" value="T" />
+      <input type="text" name="SearchDescription" value="" />
+      <input type="submit" name="Go" value="Go" />
+    </form>
+    """
+    chrome_only_html = """
+    <table>
+      <tr><td>Search</td><td>Active Tenders</td></tr>
+      <tr><td>Back</td><td>Back</td></tr>
+      <tr><td>List</td><td>Tender List :</td></tr>
+      <tr>
+        <td>e-Published Date</td>
+        <td>Closing Date</td>
+        <td>Opening Date</td>
+        <td>Title and Ref.No./Tender ID</td>
+        <td>Organisation Chain</td>
+      </tr>
+    </table>
+    """
+    respx.get(
+        url__regex=r"https://mptenders\.gov\.in/nicgep/app\?.*keyword=.*"
+    ).mock(return_value=httpx.Response(200, text="<html><body>No tenders found</body></html>"))
+    respx.get("https://mptenders.gov.in/nicgep/app").mock(
+        return_value=httpx.Response(200, text=home)
+    )
+    respx.post("https://mptenders.gov.in/nicgep/app").mock(
+        return_value=httpx.Response(200, text=chrome_only_html)
+    )
+
+    tenders = scrape_mp_tenders("calendars")
+
+    assert tenders == []
+
+
+@respx.mock
+def test_mp_tenders_rebuilds_brittle_advanced_search_links() -> None:
+    html = """
+    <table>
+      <tr>
+        <td>2.</td>
+        <td>01-May-2026 10:00 AM</td>
+        <td>30-Jun-2026 05:30 PM</td>
+        <td>01-Jul-2026 11:00 AM</td>
+        <td>
+          <a href="/nicgep/app?component=%24DirectLink_0&page=FrontEndAdvancedSearchResult&service=direct&session=T&sp=SWp8FvorQMqWExhnmC">
+            [Supply and printing of calendars]
+          </a>
+          [MP-CAL-001][2026_DOP_1]
+        </td>
+        <td>Directorate of Printing</td>
+      </tr>
+    </table>
+    """
+    respx.get(url__regex=r"https://mptenders\.gov\.in/nicgep/app.*").mock(
+        return_value=httpx.Response(200, text=html)
+    )
+
+    tenders = scrape_mp_tenders("calendars")
+
+    assert len(tenders) == 1
+    assert tenders[0]["tender_id"] == "2026_DOP_1"
+    assert "FrontEndTendersByKeyword" in tenders[0]["portal_url"]
+    assert "keyword=MP-CAL-001" in tenders[0]["portal_url"]
+    assert "SWp8FvorQMqWExhnmC" not in tenders[0]["portal_url"]
+
+
+@respx.mock
+def test_state_fetcher_rebuilds_brittle_advanced_search_links() -> None:
+    html = """
+    <table class="list_table">
+      <tr>
+        <td>1.</td>
+        <td>01-May-2026 10:00 AM</td>
+        <td>30-Jun-2026 05:30 PM</td>
+        <td>01-Jul-2026 11:00 AM</td>
+        <td>
+          <a href="/nicgep/app?component=%24DirectLink_0&page=FrontEndAdvancedSearchResult&service=direct&session=T&sp=SWp8FvorQMqWExhnmC">
+            [Supply and printing of calendars]
+          </a>
+          [MH-CAL-001][2026_DOP_1]
+        </td>
+        <td>Directorate of Printing</td>
+      </tr>
+    </table>
+    """
+    respx.get(url__regex=r"https://mahatenders\.gov\.in/nicgep/app.*").mock(
+        return_value=httpx.Response(200, text=html)
+    )
+
+    tenders = StateFetcher(keywords=["calendars"]).fetch("calendars", "MH")
+
+    assert len(tenders) == 1
+    assert tenders[0]["tender_id"] == "2026_DOP_1"
+    assert "FrontEndTendersByNIT" in tenders[0]["portal_url"]
+    assert "SWp8FvorQMqWExhnmC" not in tenders[0]["portal_url"]
 
 
 def test_mp_tenders_keyword_match_avoids_substring_false_positive() -> None:
@@ -293,6 +429,293 @@ def test_fetch_returns_empty_list_on_network_error() -> None:
     )
 
     assert CPPPFetcher().fetch("printing") == []
+
+
+@respx.mock
+def test_pnb_bank_fetcher_only_returns_keyword_matching_tenders() -> None:
+    html = """
+    <div class="tender-card">
+      <h3>Tender for printing and supply of stationery registers</h3>
+      <p>Last date of submission of Tender : 29-11-2026</p>
+      <a href="/uploads/tenders/pnb-printing-registers.pdf">Download tender</a>
+    </div>
+    <div class="tender-card">
+      <h3>Hiring of housekeeping services</h3>
+      <p>Last date of submission of Tender : 01-12-2026</p>
+      <a href="/uploads/tenders/pnb-housekeeping.pdf">Download tender</a>
+    </div>
+    """
+    respx.get("https://pnb.bank.in/Tender.aspx").mock(
+        return_value=httpx.Response(200, text=html)
+    )
+
+    tenders = scrape_pnb("registers")
+
+    assert len(tenders) == 1
+    assert_result_keys(tenders[0])
+    assert tenders[0]["portal_source"] == "PNB Tenders"
+    assert tenders[0]["ref_number"] == "PNB-PRINTING-REGISTERS.PDF"
+    assert tenders[0]["portal_url"] == "https://pnb.bank.in/uploads/tenders/pnb-printing-registers.pdf"
+
+
+@respx.mock
+def test_indian_bank_fetcher_prefers_gem_link_and_extracts_ref() -> None:
+    html = """
+    <section class="entry">
+      <h2>Indian Bank invites tender through GeM Portal for Printing and Supply of Diary, Calendars and Planners for the year 2026</h2>
+      <p>Last date of submission of Tender : 2026-11-29</p>
+      <a href="https://bidplus.gem.gov.in/all-bids?search_bid=GEM%2F2026%2FB%2F1234567">GEM/2026/B/1234567</a>
+      <a href="/wp-content/uploads/2026/11/diary-calendars.pdf">Tender document</a>
+    </section>
+    """
+    respx.get("https://indianbank.bank.in/tenders/").mock(
+        return_value=httpx.Response(200, text=html)
+    )
+
+    tenders = scrape_indian_bank("calendars")
+
+    assert len(tenders) == 1
+    assert_result_keys(tenders[0])
+    assert tenders[0]["portal_source"] == "Indian Bank Tenders"
+    assert tenders[0]["ref_number"] == "GEM/2026/B/1234567"
+    assert tenders[0]["portal_url"].startswith("https://bidplus.gem.gov.in/all-bids")
+
+
+@respx.mock
+def test_uco_bank_fetcher_deduplicates_multiple_links_in_same_tender_block() -> None:
+    html = """
+    <div class="tender-item">
+      <strong>Tender for printing of annual report and brochures</strong>
+      <span>Closing Date: 15/08/2026</span>
+      <a href="/docs/uco-annual-report.pdf">Notice</a>
+      <a href="/docs/uco-annual-report-annexure.pdf">Annexure</a>
+    </div>
+    """
+    respx.get("https://www.uco.bank.in/tenders").mock(
+        return_value=httpx.Response(200, text=html)
+    )
+
+    tenders = scrape_uco_bank("brochures")
+
+    assert len(tenders) == 1
+    assert_result_keys(tenders[0])
+    assert tenders[0]["portal_source"] == "UCO Bank Tenders"
+    assert tenders[0]["portal_url"] == "https://www.uco.bank.in/docs/uco-annual-report.pdf"
+
+
+@respx.mock
+def test_canara_bank_fetcher_uses_json_api_and_documents_endpoint() -> None:
+    respx.get(
+        url__regex=r"https://www\.canarabank\.bank\.in/o/c/tendersmasters/.*"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "items": [
+                    {
+                        "tenderId": 42,
+                        "tenderRefNo": "CB/PRINT/42",
+                        "descriptionEnglish": "Printing and supply of desk calendars",
+                        "issuedBy": "Marketing Division",
+                        "lastDate": "2026-06-30T00:00:00Z",
+                    }
+                ]
+            },
+        )
+    )
+    respx.get(
+        "https://www.canarabank.bank.in/o/c/tenderdocuments/?filter=tendersId%20eq%2042"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "items": [
+                    {
+                        "fileEntryEnglish": {
+                            "link": {
+                                "href": "https://www.canarabank.bank.in/documents/d/guest/cb-calendar.pdf"
+                            }
+                        }
+                    }
+                ]
+            },
+        )
+    )
+
+    tenders = scrape_canara_bank("calendars")
+
+    assert len(tenders) == 1
+    assert_result_keys(tenders[0])
+    assert tenders[0]["portal_source"] == "Canara Bank Tenders"
+    assert tenders[0]["ref_number"] == "CB/PRINT/42"
+    assert tenders[0]["portal_url"] == "https://www.canarabank.bank.in/documents/d/guest/cb-calendar.pdf"
+
+
+@respx.mock
+def test_central_bank_fetcher_reads_table_rows() -> None:
+    html = """
+    <table>
+      <tbody>
+        <tr>
+          <td class="views-field views-field-title">CBOI/PRINT/2026</td>
+          <td class="views-field views-field-body"><p>Printing and supply of paper stationery and calendars</p></td>
+          <td class="views-field views-field-field-date-of-submission"><time>2026-06-05</time></td>
+          <td class="views-field views-field-view"><a href="/sites/default/files/2026-05/print-calendar.pdf">View Documents</a></td>
+        </tr>
+      </tbody>
+    </table>
+    """
+    respx.get("https://centralbank.bank.in/en/active-tender").mock(
+        return_value=httpx.Response(200, text=html)
+    )
+
+    tenders = scrape_central_bank("calendars")
+
+    assert len(tenders) == 1
+    assert_result_keys(tenders[0])
+    assert tenders[0]["portal_source"] == "Central Bank of India Tenders"
+    assert tenders[0]["ref_number"] == "CBOI/PRINT/2026"
+    assert tenders[0]["portal_url"] == "https://centralbank.bank.in/sites/default/files/2026-05/print-calendar.pdf"
+
+
+@respx.mock
+def test_bank_of_india_fetcher_reads_generic_tender_blocks() -> None:
+    html = """
+    <article>
+      <h3>Tender for printing and supply of stationery forms</h3>
+      <p>End Date: 30-Jun-2026</p>
+      <a href="/documents/boi-stationery-forms.pdf">Download</a>
+    </article>
+    """
+    respx.get("https://bankofindia.co.in/tenders").mock(
+        return_value=httpx.Response(200, text=html)
+    )
+
+    tenders = scrape_bank_of_india("forms")
+
+    assert len(tenders) == 1
+    assert_result_keys(tenders[0])
+    assert tenders[0]["portal_source"] == "Bank of India Tenders"
+    assert tenders[0]["organisation"] == "Bank of India"
+    assert tenders[0]["portal_url"] == "https://bankofindia.co.in/documents/boi-stationery-forms.pdf"
+
+
+@respx.mock
+def test_lic_fetcher_reads_current_tender_table_rows() -> None:
+    html = """
+    <table id="tableID">
+      <tr>
+        <th>Sort By Region</th>
+        <th>Sort By Department</th>
+        <th>Tender Description</th>
+        <th>Date</th>
+      </tr>
+      <tr>
+        <td>CO</td>
+        <td>OS</td>
+        <td>
+          <a href="/documents/20121/0/lic-policy-bonds.pdf">
+            Tender for centralized printing of policy bonds and dispatch for LIC of India
+          </a>
+        </td>
+        <td>12/05/2026</td>
+      </tr>
+      <tr>
+        <td>SZ</td>
+        <td>Engg</td>
+        <td>External painting works at branch office</td>
+        <td>01/06/2026</td>
+      </tr>
+    </table>
+    """
+    respx.get("https://licindia.in/tenders").mock(
+        return_value=httpx.Response(200, text=html)
+    )
+
+    tenders = scrape_lic("policy bonds")
+
+    assert len(tenders) == 1
+    assert_result_keys(tenders[0])
+    assert tenders[0]["portal_source"] == "LIC Tenders"
+    assert tenders[0]["title"] == (
+        "Tender for centralized printing of policy bonds and dispatch for LIC of India"
+    )
+    assert tenders[0]["deadline_raw"] == ""
+    assert tenders[0]["organisation"] == "Life Insurance Corporation of India - CO - OS"
+    assert tenders[0]["portal_url"] == "https://licindia.in/documents/20121/0/lic-policy-bonds.pdf"
+
+
+@respx.mock
+def test_lic_fetcher_uses_active_table_and_redirect_links_only() -> None:
+    html = """
+    <table id="archiveTable">
+      <tbody>
+        <tr>
+          <td>CO</td>
+          <td>OS</td>
+          <td>Expired stationery printing tender</td>
+          <td>01/01/2025</td>
+        </tr>
+      </tbody>
+    </table>
+    <table id="tableID">
+      <thead>
+        <tr>
+          <td>Sort By Region</td>
+          <td>Sort By Department</td>
+          <td>Tender Description</td>
+          <td>Date</td>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>CO</td>
+          <td>OS</td>
+          <td onclick="redirectLink('/annual-contract-for-supply-of-stationery-book-items-enquiry-no.-stores/os/p-s/01-05/2026')">
+            Annual contract for supply of stationery &amp; book items Enquiry No. Stores/OS/P&amp;S/01-05/2026
+          </td>
+          <td>27/05/2026</td>
+        </tr>
+      </tbody>
+    </table>
+    """
+    respx.get("https://licindia.in/tenders").mock(
+        return_value=httpx.Response(200, text=html)
+    )
+
+    tenders = scrape_lic("stationery")
+
+    assert len(tenders) == 1
+    assert tenders[0]["title"].startswith("Annual contract for supply of stationery")
+    assert tenders[0]["deadline_raw"] == ""
+    assert tenders[0]["portal_url"] == (
+        "https://licindia.in/annual-contract-for-supply-of-stationery-book-items-enquiry-no.-stores/os/p-s/01-05/2026"
+    )
+    assert tenders[0]["link_verified"] is True
+
+
+@respx.mock
+def test_lic_fetcher_does_not_treat_archive_table_as_active() -> None:
+    html = """
+    <a href="/tenders/archive">Archive</a>
+    <table id="archiveTable">
+      <tbody>
+        <tr>
+          <td>CO</td>
+          <td>OS</td>
+          <td>Expired stationery printing tender</td>
+          <td>01/01/2025</td>
+        </tr>
+      </tbody>
+    </table>
+    """
+    respx.get("https://licindia.in/tenders").mock(
+        return_value=httpx.Response(200, text=html)
+    )
+
+    tenders = scrape_lic("stationery")
+
+    assert tenders == []
 
 
 def all_result_keys(tenders: list[dict]) -> bool:

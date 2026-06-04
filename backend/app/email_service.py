@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from email.message import EmailMessage
 from html import escape
+import smtplib
 from typing import Any
 
 import resend
@@ -9,7 +11,7 @@ import resend
 from app.config import get_settings
 from app.fetchers.deeplinks import build_deep_link, is_generic_link
 
-FROM_ADDRESS = "PrintTender India <alerts@printtender.in>"
+DEFAULT_FROM_ADDRESS = "PrintTender India <alerts@printtender.in>"
 SAFFRON = "#f97316"
 BG = "#111827"
 PANEL = "#1f2937"
@@ -86,6 +88,102 @@ def send_tender_alert_email(
     )
 
 
+def send_test_tender_email(to_email: str, keywords: list[str]) -> bool:
+    keyword_label = ", ".join(keywords) if keywords else "printing"
+    sample_tender = {
+        "title": "Sample tender mail - Printing and stationery supply",
+        "organisation": "PrintTender India",
+        "state": "India",
+        "bid_end_date": datetime.now(timezone.utc),
+        "portal_url": get_settings().FRONTEND_URL,
+        "portal_source": "PrintTender India",
+        "ref_number": "TEST-MAIL",
+        "tender_id": None,
+    }
+    html = _shell(
+        title="Test tender mail",
+        body=f"""
+        <p style="margin:0 0 18px;color:{MUTED};font-size:15px;line-height:1.6">
+          This is a test tender mail for
+          <strong style="color:{TEXT}">{escape(keyword_label)}</strong>.
+          Future matching tender mails will use this format after the subscription is confirmed.
+        </p>
+        {_tender_card(sample_tender)}
+        {_button("Open Dashboard", get_settings().FRONTEND_URL)}
+        """,
+    )
+    return _send(
+        to_email,
+        "PrintTender India test tender mail",
+        html,
+        f"Test tender mail for {keyword_label}. Open {get_settings().FRONTEND_URL}",
+    )
+
+
+def send_all_categories_email(to_email: str, tenders: list[Any] | None = None) -> bool:
+    categories = [
+        ("Books & notebooks", "note books, exercise books, answer books, registers, pass books"),
+        ("Forms & documents", "forms, papers, note sheets, certificates, annual reports"),
+        ("Marketing print", "brochures, flyers, posters, banners, visiting cards, pamphlets"),
+        ("Packaging & labels", "labels, tags, stickers, envelopes, duplex boxes, files"),
+        ("Specialty items", "diaries, calendars, cards, mark sheets, stationery"),
+    ]
+    category_rows = "".join(
+        f"""
+        <tr>
+          <td style="padding:12px 0;border-bottom:1px solid rgba(255,255,255,.08);color:{TEXT};font-weight:800">
+            {escape(title)}
+          </td>
+          <td style="padding:12px 0;border-bottom:1px solid rgba(255,255,255,.08);color:{MUTED};font-size:13px;line-height:1.5">
+            {escape(items)}
+          </td>
+        </tr>
+        """
+        for title, items in categories
+    )
+    tender_rows = "".join(_compact_tender_row(tender) for tender in (tenders or [])[:3])
+    tender_section = (
+        f"""
+        <h2 style="margin:22px 0 12px;font-size:18px;line-height:1.3;color:{TEXT}">
+          3 newly added tender overview
+        </h2>
+        {tender_rows}
+        <p style="margin:14px 0 0;color:{MUTED};font-size:14px;line-height:1.6">
+          Visit the PrintTender India website to view the remaining tenders, filter by category,
+          and open the official tender pages.
+        </p>
+        """
+        if tender_rows
+        else """
+        <p style="margin:18px 0 0;color:#fbbf24;font-size:14px;line-height:1.6">
+          No newly added tender rows were available for the overview. Visit the dashboard for the latest active tenders.
+        </p>
+        """
+    )
+    dashboard_url = get_settings().FRONTEND_URL
+    html = _shell(
+        title="Printing tender categories update",
+        body=f"""
+        <p style="margin:0 0 18px;color:{MUTED};font-size:15px;line-height:1.6">
+          PrintTender India is tracking active tender opportunities across all major printing categories.
+          Open the dashboard to search, filter, and apply from the latest available listings.
+        </p>
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin:0 0 18px">
+          {category_rows}
+        </table>
+        {tender_section}
+        {_button("View All Tender Categories", dashboard_url)}
+        """,
+    )
+    return _send(
+        to_email,
+        "PrintTender India: tender opportunities across all categories",
+        html,
+        f"PrintTender India is tracking tender opportunities across all printing categories. "
+        f"See 3 newly added tenders and visit {dashboard_url} for the rest.",
+    )
+
+
 def send_unsubscribe_confirmation_email(
     to_email: str, keyword: str | None = None
 ) -> bool:
@@ -108,14 +206,17 @@ def send_unsubscribe_confirmation_email(
 
 def _send(to_email: str, subject: str, html: str, text: str) -> bool:
     settings = get_settings()
+    if settings.SMTP_USERNAME and settings.SMTP_PASSWORD:
+        return _send_smtp(to_email, subject, html, text)
+
     if not settings.RESEND_API_KEY:
         print(f"[email dry-run] to={to_email} subject={subject}\n{text}")
-        return True
+        return settings.APP_ENV != "production"
     try:
         resend.api_key = settings.RESEND_API_KEY
         resend.Emails.send(
             {
-                "from": FROM_ADDRESS,
+                "from": settings.EMAIL_FROM or DEFAULT_FROM_ADDRESS,
                 "to": [to_email],
                 "subject": subject,
                 "html": html,
@@ -125,6 +226,30 @@ def _send(to_email: str, subject: str, html: str, text: str) -> bool:
         return True
     except Exception as exc:
         print(f"[email skipped] to={to_email} subject={subject} error={exc}")
+        return False
+
+
+def _send_smtp(to_email: str, subject: str, html: str, text: str) -> bool:
+    settings = get_settings()
+    host = settings.SMTP_HOST or "smtp.gmail.com"
+    from_address = settings.EMAIL_FROM or settings.SMTP_USERNAME
+
+    message = EmailMessage()
+    message["From"] = from_address
+    message["To"] = to_email
+    message["Subject"] = subject
+    message.set_content(text)
+    message.add_alternative(html, subtype="html")
+
+    try:
+        with smtplib.SMTP(host, settings.SMTP_PORT, timeout=20) as smtp:
+            if settings.SMTP_USE_TLS:
+                smtp.starttls()
+            smtp.login(settings.SMTP_USERNAME, settings.SMTP_PASSWORD)
+            smtp.send_message(message)
+        return True
+    except Exception as exc:
+        print(f"[smtp email skipped] to={to_email} subject={subject} error={exc}")
         return False
 
 
@@ -180,6 +305,42 @@ def _tender_card(tender: Any) -> str:
       <a href="{escape(url)}" style="display:inline-block;color:{SAFFRON};font-weight:800;text-decoration:none">View and Apply</a>
     </div>
     """
+
+
+def _compact_tender_row(tender: Any) -> str:
+    title = _get(tender, "title") or "Tender notice"
+    organisation = _get(tender, "organisation") or "Not specified"
+    state = _get(tender, "state") or "India"
+    deadline = _get(tender, "bid_end_date")
+    value = _get(tender, "value_inr")
+    url = _deep_link_for(tender)
+    deadline_label, deadline_color = _deadline_display(deadline)
+    value_label = _value_display(value)
+    return f"""
+    <div style="border:1px solid rgba(255,255,255,.08);border-radius:10px;padding:14px;margin:0 0 10px;background:#172033">
+      <h3 style="margin:0 0 7px;font-size:15px;line-height:1.35;color:{TEXT}">{escape(str(title))}</h3>
+      <p style="margin:0 0 6px;color:{MUTED};font-size:13px;line-height:1.5">{escape(str(organisation))}</p>
+      <p style="margin:0 0 6px;color:{MUTED};font-size:13px">
+        {escape(str(state))}{' · ' + escape(value_label) if value_label else ''}
+      </p>
+      <p style="margin:0 0 10px;color:{deadline_color};font-size:13px;font-weight:700">{escape(deadline_label)}</p>
+      <a href="{escape(url)}" style="display:inline-block;color:{SAFFRON};font-weight:800;text-decoration:none">View tender</a>
+    </div>
+    """
+
+
+def _value_display(value: Any) -> str:
+    try:
+        amount = float(value or 0)
+    except (TypeError, ValueError):
+        return ""
+    if amount <= 0:
+        return ""
+    if amount >= 10_000_000:
+        return f"₹{amount / 10_000_000:.2f} Cr"
+    if amount >= 100_000:
+        return f"₹{amount / 100_000:.2f} L"
+    return f"₹{amount:,.0f}"
 
 
 def _deep_link_for(tender: Any) -> str:

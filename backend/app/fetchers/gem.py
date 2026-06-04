@@ -2,6 +2,7 @@
 import asyncio
 import random
 import re
+import threading
 from urllib.parse import quote_plus, urljoin
 
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
@@ -12,9 +13,10 @@ from app.fetchers.deeplinks import build_deep_link, is_document_download_link
 
 GEM_GENERIC_TEXT_RE = re.compile(
     r"^(?:view(?: details)?|details|bid details|bid document|document|download|apply|open|more|"
-    r"corrigendum|boq|ra details?|seller details?)$",
+    r"corrigendum|boq|ra details?|seller details?|ra no(?::.*)?)$",
     flags=re.IGNORECASE,
 )
+GEM_REFERENCE_RE = re.compile(r"\bGEM/\d{4}/[A-Z]/\d+\b", flags=re.IGNORECASE)
 
 GEM_FIELD_LABELS = (
     "Bid Title",
@@ -41,7 +43,7 @@ class GeMFetcher(BaseFetcher):
 
     def fetch(self, keyword: str) -> list[dict]:
         try:
-            return asyncio.run(self._fetch_async(keyword))
+            return _run_async(self._fetch_async(keyword))
         except Exception as exc:
             self.log_result(self.portal_source, keyword, 0, 0, "error", str(exc))
             return []
@@ -49,7 +51,11 @@ class GeMFetcher(BaseFetcher):
     async def _fetch_async(self, keyword: str) -> list[dict]:
         tenders: list[dict] = []
         async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch(headless=True)
+            # Opt into Chromium's new headless mode to avoid browser startup crashes.
+            browser = await playwright.chromium.launch(
+                headless=True,
+                channel="chromium",
+            )
             try:
                 context = await browser.new_context(user_agent=USER_AGENT)
                 page = await context.new_page()
@@ -101,6 +107,7 @@ class GeMFetcher(BaseFetcher):
                 title, linked_href = await _extract_gem_primary_candidate(
                     item, raw_text, text
                 )
+                title = _finalize_gem_title(title, bid_number, keyword)
 
                 chosen_link = _prefer_gem_navigation_link(linked_href, direct_link)
                 if chosen_link:
@@ -185,6 +192,28 @@ def _compact_ws(text: str) -> str:
     return " ".join((text or "").split())
 
 
+def _run_async(coro):
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+
+    result = {}
+
+    def runner() -> None:
+        try:
+            result["value"] = asyncio.run(coro)
+        except Exception as exc:
+            result["error"] = exc
+
+    thread = threading.Thread(target=runner)
+    thread.start()
+    thread.join()
+    if "error" in result:
+        raise result["error"]
+    return result.get("value", [])
+
+
 def _clean_gem_candidate(text: str) -> str:
     return _compact_ws(text).strip(" -|:")
 
@@ -204,9 +233,24 @@ def _is_generic_gem_text(text: str) -> bool:
     normalized = _clean_gem_candidate(text)
     if not normalized:
         return True
+    if _is_gem_bid_number_text(normalized):
+        return True
     if GEM_GENERIC_TEXT_RE.fullmatch(normalized):
         return True
     return _looks_like_field_value(normalized)
+
+
+def _is_gem_bid_number_text(text: str) -> bool:
+    normalized = _clean_gem_candidate(text)
+    match = GEM_REFERENCE_RE.fullmatch(normalized)
+    return match is not None
+
+
+def _finalize_gem_title(title: str, bid_number: str, keyword: str) -> str:
+    cleaned = _clean_gem_candidate(title)
+    if not cleaned or _is_generic_gem_text(cleaned):
+        return f"GeM tender for {keyword} - {bid_number}"
+    return cleaned
 
 
 def _pick_gem_title_from_candidates(

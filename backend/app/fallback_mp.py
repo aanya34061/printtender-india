@@ -13,7 +13,8 @@ from bs4 import BeautifulSoup
 
 from app.fetchers.aggregators import scrape_bidassist, scrape_tenderdekho
 from app.fetchers.cppp import CPPPFetcher
-from app.fetchers.deeplinks import classify_link
+from app.fetchers.deeplinks import build_deep_link, classify_link, is_brittle_nic_direct_link
+from app.fetchers.mp_portals import scrape_mp_eproc
 from app.fetchers.state import StateFetcher
 from app.processing.normaliser import normalise_state, normalise_tender, parse_datetime, parse_value
 
@@ -98,7 +99,13 @@ def _parse_title_ref(value: str) -> tuple[str, str, str | None]:
 
 def _record_from_search_row(index: int, columns: list[str], href: str | None) -> dict:
     title, ref_number, tender_id = _parse_title_ref(columns[4])
-    portal_url = urljoin(BASE_URL, href or "/nicgep/app")
+    raw_portal_url = urljoin(BASE_URL, href or "/nicgep/app")
+    if is_brittle_nic_direct_link(raw_portal_url):
+        portal_url = build_deep_link(MP_PORTAL, ref_number, tender_id)
+        link_verified = bool(tender_id)
+    else:
+        portal_url = raw_portal_url
+        link_verified = True
     now = datetime.now(timezone.utc)
     query_terms = [term for term in (DEFAULT_QUERY,) if term]
     return {
@@ -115,8 +122,8 @@ def _record_from_search_row(index: int, columns: list[str], href: str | None) ->
         "published_date": _parse_dt(columns[1]),
         "portal_url": portal_url,
         "tender_id": tender_id,
-        "link_type": classify_link(portal_url, True),
-        "link_verified": True,
+        "link_type": classify_link(portal_url, link_verified),
+        "link_verified": link_verified,
         "keywords": query_terms,
         "relevance_score": 80,
         "fetched_at": now,
@@ -237,6 +244,10 @@ def fetch_fallback_tenders(query: str | None = None) -> list[dict]:
 
     tenders: list[dict] = []
     tenders.extend(fetch_mp_tenders(normalized_query))
+    for row in scrape_mp_eproc(normalized_query):
+        serialized = _serialize_fallback_record(row)
+        if serialized is not None:
+            tenders.append(serialized)
     for row in CPPPFetcher().fetch(normalized_query):
         serialized = _serialize_fallback_record(row)
         if serialized is not None:

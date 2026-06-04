@@ -1,5 +1,5 @@
 from collections.abc import AsyncGenerator
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, quote, unquote, urlencode, urlsplit, urlunsplit
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy import text
@@ -15,6 +15,32 @@ def _asyncpg_url(database_url: str) -> str:
         else database_url
     )
     parts = urlsplit(url)
+    if (
+        parts.netloc.startswith("postgres:")
+        and "@aws-1-ap-southeast-2.pooler.supabase.com" in parts.netloc
+    ):
+        password = unquote(parts.netloc[len("postgres:") : parts.netloc.rfind("@")])
+        netloc = (
+            f"postgres.crcfyqmdwixoonnobefo:{quote(password)}"
+            "@aws-1-ap-southeast-2.pooler.supabase.com:5432"
+        )
+        parts = parts._replace(netloc=netloc)
+    hostname = parts.hostname or ""
+    if hostname == "db.crcfyqmdwixoonnobefo.supabase.co":
+        username = parts.username or "postgres"
+        password = unquote(parts.password or "")
+        netloc = (
+            f"{quote(username + '.crcfyqmdwixoonnobefo')}:{quote(password)}"
+            "@aws-1-ap-southeast-2.pooler.supabase.com:5432"
+        )
+        parts = parts._replace(netloc=netloc)
+    elif hostname.endswith(".pooler.supabase.com") and parts.username == "postgres":
+        password = unquote(parts.password or "")
+        netloc = (
+            f"postgres.crcfyqmdwixoonnobefo:{quote(password)}"
+            f"@{hostname}:{parts.port or 5432}"
+        )
+        parts = parts._replace(netloc=netloc)
     query = dict(parse_qsl(parts.query, keep_blank_values=True))
     if query.get("sslmode") == "require":
         query.pop("sslmode", None)
@@ -25,9 +51,12 @@ def _asyncpg_url(database_url: str) -> str:
 
 
 settings = get_settings()
+ASYNC_DATABASE_URL = _asyncpg_url(settings.DATABASE_URL)
 engine = create_async_engine(
-    _asyncpg_url(settings.DATABASE_URL),
+    ASYNC_DATABASE_URL,
     pool_pre_ping=True,
+    pool_size=2,
+    max_overflow=0,
     connect_args={"prepared_statement_cache_size": 0, "timeout": 10},
 )
 AsyncSessionLocal = async_sessionmaker(

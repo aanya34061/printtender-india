@@ -5,7 +5,9 @@ from urllib.parse import parse_qs, quote, quote_plus, urlparse
 
 NIC_PORTAL_BASES: dict[str, str] = {
     "CPPP": "https://eprocure.gov.in/eprocure/app",
+    "CPPP-eTenders": "https://etenders.gov.in/eprocure/app",
     "MP Tenders": "https://mptenders.gov.in/nicgep/app",
+    "eproc.mp.gov.in": "https://eproc.mp.gov.in/nicgep/app",
     "MP PWD": "https://mpeprocurement.gov.in/nicgep/app",
     "UP Tenders": "https://etender.up.nic.in/nicgep/app",
     "Maharashtra Tenders": "https://mahatenders.gov.in/nicgep/app",
@@ -25,11 +27,15 @@ GENERIC_HOMEPAGE_URLS: frozenset[str] = frozenset(
         "",
         "https://eprocure.gov.in",
         "https://eprocure.gov.in/eprocure/app",
+        "https://etenders.gov.in",
+        "https://etenders.gov.in/eprocure/app",
         "https://gem.gov.in",
         "https://bidplus.gem.gov.in",
         "https://bidplus.gem.gov.in/all-bids",
         "https://mptenders.gov.in",
         "https://mptenders.gov.in/nicgep/app",
+        "https://eproc.mp.gov.in",
+        "https://eproc.mp.gov.in/nicgep/app",
         "https://mpeprocurement.gov.in",
         "https://mpeprocurement.gov.in/nicgep/app",
         "https://etender.up.nic.in",
@@ -48,6 +54,8 @@ GENERIC_HOMEPAGE_URLS: frozenset[str] = frozenset(
         "https://mpforest.gov.in",
         "https://mpforest.gov.in/tenders",
         "https://mpinfo.org",
+        "https://licindia.in",
+        "https://licindia.in/tenders",
     }
 )
 
@@ -70,8 +78,31 @@ TENDER_IDENTIFIER_RE = re.compile(
 )
 NIC_PORTAL_HOSTS = frozenset(urlparse(base).netloc for base in NIC_PORTAL_BASES.values())
 NIC_DIRECT_SP_RE = re.compile(r"[?&]sp=S[^&\s\"']+", flags=re.IGNORECASE)
+NIC_BRITTLE_DIRECT_RE = re.compile(
+    r"(?:[?&]component=%24DirectLink_0(?:[&#]|$)|[?&]page=FrontEndAdvancedSearchResult(?:[&#]|$))",
+    flags=re.IGNORECASE,
+)
 GEM_ALL_BIDS_URL = "https://bidplus.gem.gov.in/all-bids"
 GEM_DOCUMENT_PATH_RE = re.compile(r"(?:^|/)showbidDocument/\d+(?:[?#].*)?$", flags=re.IGNORECASE)
+NIC_SEARCH_ONLY_PORTALS = frozenset(
+    {
+        "CPPP",
+        "CPPP-eTenders",
+        "MP Tenders",
+        "eproc.mp.gov.in",
+        "State-MP",
+        "MP",
+        "UP Tenders",
+        "State-UP",
+        "UP",
+        "Maharashtra Tenders",
+        "State-MH",
+        "MH",
+        "Rajasthan Tenders",
+        "State-RJ",
+        "RJ",
+    }
+)
 
 
 def is_generic_link(url: str | None) -> bool:
@@ -95,7 +126,7 @@ def is_generic_link(url: str | None) -> bool:
         if not path:
             return True
         if parsed.netloc.endswith("bidplus.gem.gov.in") and path == "all-bids":
-            return True
+            return not _query_contains_specific_ref(query)
         if _is_aggregator_listing(parsed.netloc, path):
             return True
         if _is_aggregator_detail(parsed.netloc, path):
@@ -130,7 +161,7 @@ def build_deep_link(portal: str, ref_number: str, tender_id: str | None = None) 
 
     if portal_name in NIC_PORTAL_BASES:
         base = NIC_PORTAL_BASES[portal_name]
-        if tid:
+        if tid and portal_name not in NIC_SEARCH_ONLY_PORTALS:
             return _nic_direct_link(base, tid)
         return _nic_search_link(base, ref)
 
@@ -160,6 +191,9 @@ def build_deep_link(portal: str, ref_number: str, tender_id: str | None = None) 
                 f"https://www.google.com/search?q={quote_plus(ref)}+site:bidassist.com"
             )
 
+    if portal_name == "LIC Tenders":
+        return "https://licindia.in/tenders"
+
     query = f"{ref} tender".strip() or "government tender"
     return f"https://www.google.com/search?q={quote_plus(query)}"
 
@@ -187,6 +221,14 @@ def extract_nic_tender_id(url: str) -> str | None:
 
 def has_nic_direct_sp(url: str | None) -> bool:
     return NIC_DIRECT_SP_RE.search(url or "") is not None
+
+
+def is_brittle_nic_direct_link(url: str | None) -> bool:
+    cleaned = (url or "").strip()
+    if not cleaned:
+        return False
+    parsed = urlparse(cleaned)
+    return _is_nic_host(parsed.netloc) and NIC_BRITTLE_DIRECT_RE.search(cleaned) is not None
 
 
 def classify_link(url: str, link_verified: bool) -> str:

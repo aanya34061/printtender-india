@@ -17,7 +17,7 @@ services:
     runtime: python
     rootDir: backend
     buildCommand: pip install -r requirements.txt && playwright install chromium --with-deps
-    startCommand: celery -A app.tasks.celery_app.celery_app worker --loglevel=info --concurrency=2
+    startCommand: celery -A app.tasks.celery_app.celery_app worker --beat --loglevel=info --concurrency=2
     plan: free
     envVars:
       - fromGroup: printtender-env
@@ -33,6 +33,28 @@ services:
     envVars:
       - fromGroup: printtender-env
 
+  # --- Scheduled subscriber mails: 09:00 and 19:00 IST (03:30 and 13:30 UTC) ---
+  - type: cron
+    name: printtender-mail-scheduler-main
+    runtime: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt && playwright install chromium --with-deps
+    startCommand: python -c "import asyncio; from app.tasks.fetch_job import send_scheduled_subscriber_mails; print(asyncio.run(send_scheduled_subscriber_mails()))"
+    schedule: "30 3,13 * * *"
+    envVars:
+      - fromGroup: printtender-env
+
+  # --- Scheduled subscriber mails: 13:30 IST (08:00 UTC) ---
+  - type: cron
+    name: printtender-mail-scheduler-afternoon
+    runtime: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt && playwright install chromium --with-deps
+    startCommand: python -c "import asyncio; from app.tasks.fetch_job import send_scheduled_subscriber_mails; print(asyncio.run(send_scheduled_subscriber_mails()))"
+    schedule: "0 8 * * *"
+    envVars:
+      - fromGroup: printtender-env
+
 envVarGroups:
   - name: printtender-env
     envVars:
@@ -42,8 +64,22 @@ envVarGroups:
         sync: false
       - key: RESEND_API_KEY
         sync: false
+      - key: EMAIL_FROM
+        sync: false
+      - key: SMTP_HOST
+        value: smtp.gmail.com
+      - key: SMTP_PORT
+        value: "587"
+      - key: SMTP_USERNAME
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
+      - key: SMTP_USE_TLS
+        value: "true"
       - key: APP_ENV
         value: production
+      - key: ENABLE_SCHEDULED_MAILS
+        value: "true"
       - key: FETCH_INTERVAL_HOURS
         value: "6"
       - key: MAX_TENDERS_PER_KEYWORD

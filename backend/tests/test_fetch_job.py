@@ -1,10 +1,12 @@
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from unittest.mock import MagicMock
 
 import pytest
 
 from app.sources import PORTAL_SOURCES
 from app.tasks import fetch_job
+from app.tasks.mail_scheduler import IST, next_scheduled_mail_at
 
 
 def test_portal_scrapers_cover_active_portal_sources() -> None:
@@ -13,13 +15,86 @@ def test_portal_scrapers_cover_active_portal_sources() -> None:
     )
 
 
-def test_mp_tenders_uses_image_product_keywords() -> None:
+def test_mp_tenders_uses_mp_specific_keywords() -> None:
     keywords_by_source = {
         label: keywords
         for label, _scraper, keywords in fetch_job.PORTAL_SCRAPERS
     }
 
-    assert keywords_by_source["MP Tenders"] is fetch_job.IMAGE_PRODUCT_KEYWORDS
+    assert keywords_by_source["MP Tenders"] is fetch_job.MP_TENDERS_KEYWORDS
+    assert keywords_by_source["eproc.mp.gov.in"] is fetch_job.MP_TENDERS_KEYWORDS
+
+
+def test_bank_portals_use_focused_bank_keywords() -> None:
+    keywords_by_source = {
+        label: keywords
+        for label, _scraper, keywords in fetch_job.PORTAL_SCRAPERS
+    }
+
+    for label in (
+        "PNB Tenders",
+        "Canara Bank Tenders",
+        "Central Bank of India Tenders",
+        "Bank of India Tenders",
+        "Indian Bank Tenders",
+        "UCO Bank Tenders",
+        "Indian Overseas Bank Tenders",
+        "LIC Tenders",
+    ):
+        assert keywords_by_source[label] is fetch_job.BANK_TENDER_KEYWORDS
+
+
+def test_alert_matching_uses_all_subscriber_keywords_and_tender_fields() -> None:
+    subscriber = MagicMock()
+    subscriber.keywords = ["printing", "stationery", "printing"]
+    subscriber.keyword = "forms"
+    tender = MagicMock()
+    tender.title = "Annual office supply tender"
+    tender.keywords = ["paper"]
+    tender.organisation = "State Stationery Department"
+    tender.category = "office supplies"
+
+    keywords = fetch_job._subscriber_keywords(subscriber)
+
+    assert keywords == ["printing", "stationery", "forms"]
+    assert fetch_job._tender_matches_any_keyword(tender, keywords) is True
+
+
+def test_alert_frequency_due_windows() -> None:
+    now = datetime(2026, 6, 1, 12, tzinfo=timezone.utc)
+    subscriber = MagicMock()
+
+    subscriber.frequency = "instant"
+    subscriber.last_alerted_at = now
+    subscriber.last_sent = now
+    assert fetch_job._subscriber_is_due(subscriber, now) is True
+
+    subscriber.frequency = "daily"
+    subscriber.last_alerted_at = now - timedelta(hours=22)
+    assert fetch_job._subscriber_is_due(subscriber, now) is False
+    subscriber.last_alerted_at = now - timedelta(hours=24)
+    assert fetch_job._subscriber_is_due(subscriber, now) is True
+
+    subscriber.frequency = "weekly"
+    subscriber.last_alerted_at = now - timedelta(days=6)
+    assert fetch_job._subscriber_is_due(subscriber, now) is False
+    subscriber.last_alerted_at = now - timedelta(days=7)
+    assert fetch_job._subscriber_is_due(subscriber, now) is True
+
+
+def test_next_scheduled_mail_at_uses_requested_ist_times() -> None:
+    assert next_scheduled_mail_at(
+        datetime(2026, 6, 2, 8, 59, tzinfo=IST)
+    ) == datetime(2026, 6, 2, 9, 0, tzinfo=IST)
+    assert next_scheduled_mail_at(
+        datetime(2026, 6, 2, 9, 1, tzinfo=IST)
+    ) == datetime(2026, 6, 2, 13, 30, tzinfo=IST)
+    assert next_scheduled_mail_at(
+        datetime(2026, 6, 2, 13, 31, tzinfo=IST)
+    ) == datetime(2026, 6, 2, 19, 0, tzinfo=IST)
+    assert next_scheduled_mail_at(
+        datetime(2026, 6, 2, 19, 1, tzinfo=IST)
+    ) == datetime(2026, 6, 3, 9, 0, tzinfo=IST)
 
 
 @pytest.mark.asyncio
@@ -50,6 +125,11 @@ async def test_run_fetch_cycle_schedules_all_portal_scrapers(
         upserted.extend(tenders)
         return []
 
+    async def fake_deactivate_missing_source_tenders(
+        _source: str, _active_ref_numbers: set[str]
+    ) -> int:
+        return 0
+
     async def fake_send_matching_alerts(_ids: list[int]) -> int:
         return 0
 
@@ -62,7 +142,7 @@ async def test_run_fetch_cycle_schedules_all_portal_scrapers(
             (
                 label,
                 make_scraper(label),
-                ["calendars", "diary"] if label == "MP Tenders" else ["printing"],
+                ["printing"],
             )
             for label in PORTAL_SOURCES
         ),
@@ -71,6 +151,11 @@ async def test_run_fetch_cycle_schedules_all_portal_scrapers(
     monkeypatch.setattr(fetch_job, "normalise_tender", lambda raw: raw)
     monkeypatch.setattr(fetch_job, "deduplicate_tenders", lambda tenders: tenders)
     monkeypatch.setattr(fetch_job, "_upsert_tenders", fake_upsert)
+    monkeypatch.setattr(
+        fetch_job,
+        "_deactivate_missing_source_tenders",
+        fake_deactivate_missing_source_tenders,
+    )
     monkeypatch.setattr(fetch_job, "send_matching_alerts", fake_send_matching_alerts)
 
     import app.fetchers.newspapers as newspapers
@@ -95,11 +180,257 @@ async def test_run_fetch_cycle_schedules_all_portal_scrapers(
     count = await fetch_job.run_fetch_cycle()
 
     assert count == 0
-    expected_calls = [
-        (label, "printing") for label in PORTAL_SOURCES if label != "MP Tenders"
-    ]
-    expected_calls.extend(
-        [("MP Tenders", "calendars"), ("MP Tenders", "diary")]
-    )
+    expected_calls = [(label, "printing") for label in PORTAL_SOURCES]
     assert Counter(calls) == Counter(expected_calls)
     assert {row["portal_source"] for row in upserted} == set(PORTAL_SOURCES)
+
+
+@pytest.mark.asyncio
+async def test_run_fetch_cycle_deactivates_lic_rows_missing_from_active_page(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deactivated: list[tuple[str, set[str]]] = []
+
+    def lic_scraper(keyword: str) -> list[dict]:
+        return [
+            {
+                "portal_source": "LIC Tenders",
+                "ref_number": f"LIC-ACTIVE-{keyword}",
+                "title": f"Active LIC {keyword} printing tender",
+                "organisation": "Life Insurance Corporation of India",
+            }
+        ]
+
+    async def fake_log_fetch(
+        source: str, found: int, status: str, error: str | None = None
+    ) -> None:
+        return None
+
+    async def fake_upsert(_tenders: list[dict]) -> list[int]:
+        return []
+
+    async def fake_deactivate_missing_source_tenders(
+        source: str, active_ref_numbers: set[str]
+    ) -> int:
+        deactivated.append((source, active_ref_numbers))
+        return 2
+
+    async def fake_send_matching_alerts(_ids: list[int]) -> int:
+        return 0
+
+    monkeypatch.setattr(
+        fetch_job,
+        "PORTAL_SCRAPERS",
+        (("LIC Tenders", lic_scraper, ("stationery", "forms")),),
+    )
+    monkeypatch.setattr(fetch_job, "_log_fetch", fake_log_fetch)
+    monkeypatch.setattr(fetch_job, "normalise_tender", lambda raw: raw)
+    monkeypatch.setattr(fetch_job, "deduplicate_tenders", lambda tenders: tenders)
+    monkeypatch.setattr(fetch_job, "_upsert_tenders", fake_upsert)
+    monkeypatch.setattr(
+        fetch_job,
+        "_deactivate_missing_source_tenders",
+        fake_deactivate_missing_source_tenders,
+    )
+    monkeypatch.setattr(fetch_job, "send_matching_alerts", fake_send_matching_alerts)
+
+    await fetch_job.run_fetch_cycle(include_newspapers=False)
+
+    assert deactivated == [
+        (
+            "LIC Tenders",
+            {"LIC-ACTIVE-stationery", "LIC-ACTIVE-forms"},
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_run_fetch_cycle_deactivates_all_rows_after_clean_empty_refresh(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deactivated: list[tuple[str, set[str]]] = []
+
+    def empty_scraper(_keyword: str) -> list[dict]:
+        return []
+
+    async def fake_log_fetch(
+        source: str, found: int, status: str, error: str | None = None
+    ) -> None:
+        return None
+
+    async def fake_upsert(_tenders: list[dict]) -> list[int]:
+        return []
+
+    async def fake_deactivate_missing_source_tenders(
+        source: str, active_ref_numbers: set[str]
+    ) -> int:
+        deactivated.append((source, active_ref_numbers))
+        return 3
+
+    async def fake_send_matching_alerts(_ids: list[int]) -> int:
+        return 0
+
+    monkeypatch.setattr(
+        fetch_job,
+        "PORTAL_SCRAPERS",
+        (("CPPP", empty_scraper, ("printing",)),),
+    )
+    monkeypatch.setattr(fetch_job, "_log_fetch", fake_log_fetch)
+    monkeypatch.setattr(fetch_job, "normalise_tender", lambda raw: raw)
+    monkeypatch.setattr(fetch_job, "deduplicate_tenders", lambda tenders: tenders)
+    monkeypatch.setattr(fetch_job, "_upsert_tenders", fake_upsert)
+    monkeypatch.setattr(
+        fetch_job,
+        "_deactivate_missing_source_tenders",
+        fake_deactivate_missing_source_tenders,
+    )
+    monkeypatch.setattr(fetch_job, "send_matching_alerts", fake_send_matching_alerts)
+
+    await fetch_job.run_fetch_cycle(include_newspapers=False)
+
+    assert deactivated == [("CPPP", set())]
+
+
+@pytest.mark.asyncio
+async def test_run_fetch_cycle_skips_deactivation_after_partial_source_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deactivated: list[tuple[str, set[str]]] = []
+
+    def flaky_scraper(keyword: str) -> list[dict]:
+        if keyword == "forms":
+            raise RuntimeError("portal timeout")
+        return [
+            {
+                "portal_source": "GeM",
+                "ref_number": "GEM-ACTIVE-1",
+                "title": "Active GeM printing tender",
+                "organisation": "Buyer",
+            }
+        ]
+
+    async def fake_log_fetch(
+        source: str, found: int, status: str, error: str | None = None
+    ) -> None:
+        return None
+
+    async def fake_upsert(_tenders: list[dict]) -> list[int]:
+        return []
+
+    async def fake_deactivate_missing_source_tenders(
+        source: str, active_ref_numbers: set[str]
+    ) -> int:
+        deactivated.append((source, active_ref_numbers))
+        return 1
+
+    async def fake_send_matching_alerts(_ids: list[int]) -> int:
+        return 0
+
+    monkeypatch.setattr(
+        fetch_job,
+        "PORTAL_SCRAPERS",
+        (("GeM", flaky_scraper, ("printing", "forms")),),
+    )
+    monkeypatch.setattr(fetch_job, "_log_fetch", fake_log_fetch)
+    monkeypatch.setattr(fetch_job, "normalise_tender", lambda raw: raw)
+    monkeypatch.setattr(fetch_job, "deduplicate_tenders", lambda tenders: tenders)
+    monkeypatch.setattr(fetch_job, "_upsert_tenders", fake_upsert)
+    monkeypatch.setattr(
+        fetch_job,
+        "_deactivate_missing_source_tenders",
+        fake_deactivate_missing_source_tenders,
+    )
+    monkeypatch.setattr(fetch_job, "send_matching_alerts", fake_send_matching_alerts)
+
+    await fetch_job.run_fetch_cycle(include_newspapers=False)
+
+    assert deactivated == []
+
+
+@pytest.mark.asyncio
+async def test_scheduled_subscriber_mails_sends_to_active_subscribers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    subscriber = MagicMock()
+    subscriber.id = 1
+    subscriber.email = "press@example.com"
+    subscriber.last_sent = None
+    tender = MagicMock()
+    commits = 0
+    sent: list[tuple[str, list[MagicMock]]] = []
+
+    class FakeSession:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def scalars(self, _query):
+            self.calls += 1
+            return [subscriber] if self.calls == 1 else [tender]
+
+        async def commit(self):
+            nonlocal commits
+            commits += 1
+
+    def fake_send(to_email: str, tenders: list[MagicMock]) -> bool:
+        sent.append((to_email, tenders))
+        return True
+
+    monkeypatch.setattr(fetch_job, "async_session", FakeSession)
+    monkeypatch.setattr(fetch_job, "send_all_categories_email", fake_send)
+
+    result = await fetch_job.send_scheduled_subscriber_mails()
+
+    assert result == {"total_subscribers": 1, "sent": 1, "failed": []}
+    assert sent == [("press@example.com", [tender])]
+    assert subscriber.last_sent is not None
+    assert commits == 1
+
+
+@pytest.mark.asyncio
+async def test_scheduled_subscriber_mails_skips_recently_sent_subscriber(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    subscriber = MagicMock()
+    subscriber.id = 1
+    subscriber.email = "press@example.com"
+    subscriber.last_sent = datetime.now(timezone.utc) - timedelta(minutes=10)
+    tender = MagicMock()
+    commits = 0
+    sent: list[str] = []
+
+    class FakeSession:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def scalars(self, _query):
+            self.calls += 1
+            return [subscriber] if self.calls == 1 else [tender]
+
+        async def commit(self):
+            nonlocal commits
+            commits += 1
+
+    def fake_send(to_email: str, _tenders: list[MagicMock]) -> bool:
+        sent.append(to_email)
+        return True
+
+    monkeypatch.setattr(fetch_job, "async_session", FakeSession)
+    monkeypatch.setattr(fetch_job, "send_all_categories_email", fake_send)
+
+    result = await fetch_job.send_scheduled_subscriber_mails()
+
+    assert result == {"total_subscribers": 1, "sent": 0, "failed": []}
+    assert sent == []
+    assert commits == 0

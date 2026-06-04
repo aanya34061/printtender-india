@@ -13,7 +13,11 @@ from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from playwright.async_api import async_playwright
 
 from app.fetchers.base import BaseFetcher, REQUEST_HEADERS, USER_AGENT
-from app.fetchers.deeplinks import build_deep_link, extract_nic_tender_id
+from app.fetchers.deeplinks import (
+    build_deep_link,
+    extract_nic_tender_id,
+    is_brittle_nic_direct_link,
+)
 from app.fetchers.gem import (
     _extract_gem_primary_candidate,
     _pick_best_gem_href,
@@ -23,6 +27,7 @@ from app.keywords import IMAGE_PRODUCT_KEYWORDS
 
 MP_STATE = "Madhya Pradesh"
 MPTENDERS_URL = "https://mptenders.gov.in/nicgep/app"
+EPROC_MP_URL = "https://eproc.mp.gov.in/nicgep/app"
 
 
 def _dedupe_keywords(keywords: list[str]) -> list[str]:
@@ -237,6 +242,13 @@ def _record_from_nic_row(
             tender_id=tender_id,
         )
 
+    if portal_source == "MP Tenders":
+        # The legacy MP portal page includes navigation chrome and table headers in
+        # generic tables. Real result rows carry a direct tender link or an
+        # extractable tender id/ref block; anything else should be ignored.
+        if not direct_url and not _looks_like_mp_tender_result_row(row.get_text(" ", strip=True)):
+            return None
+
     direct_url, tender_id = _first_direct_nic_link(row, base_url)
     row_text = row.get_text(" ", strip=True)
     ref_number = _cell_text(columns, 1) or _extract_ref(row_text)
@@ -268,6 +280,15 @@ def _record_from_nic_row(
     )
 
 
+def _looks_like_mp_tender_result_row(text: str) -> bool:
+    normalized = " ".join(text.split())
+    if not normalized or _is_boilerplate_tender_row(normalized):
+        return False
+    if normalized in {"Search", "Back", "Tender List :", "Portal policies"}:
+        return False
+    return bool(re.search(r"\[[^\]]+\]\s*\[[^\]]+\](?:\s*\[[^\]]+\])?", normalized))
+
+
 def _record_from_mptenders_result_row(
     *,
     columns: list[Tag],
@@ -277,7 +298,7 @@ def _record_from_mptenders_result_row(
     tender_id: str | None,
 ) -> dict | None:
     title_ref_text = _cell_text(columns, 4)
-    title, ref_number = _split_mptenders_title_ref(title_ref_text)
+    title, ref_number, parsed_tender_id = _split_mptenders_title_ref(title_ref_text)
     organisation = _cell_text(columns, 5)
     deadline = _cell_text(columns, 2)
 
@@ -289,7 +310,13 @@ def _record_from_mptenders_result_row(
     ):
         return None
 
-    portal_url = direct_url or build_deep_link(portal_source, ref_number, tender_id)
+    resolved_tender_id = parsed_tender_id or tender_id
+    if direct_url and is_brittle_nic_direct_link(direct_url):
+        portal_url = build_deep_link(portal_source, ref_number, resolved_tender_id)
+        link_verified = bool(resolved_tender_id)
+    else:
+        portal_url = direct_url or build_deep_link(portal_source, ref_number, resolved_tender_id)
+        link_verified = bool(direct_url)
     return _builder.build_record(
         ref_number=ref_number,
         title=title,
@@ -300,18 +327,19 @@ def _record_from_mptenders_result_row(
         value_raw=None,
         portal_url=portal_url,
         keyword_hit=keyword,
-        tender_id=tender_id,
-        link_verified=bool(direct_url),
+        tender_id=resolved_tender_id,
+        link_verified=link_verified,
     )
 
 
-def _split_mptenders_title_ref(value: str) -> tuple[str, str]:
+def _split_mptenders_title_ref(value: str) -> tuple[str, str, str | None]:
     parts = re.findall(r"\[([^\]]+)\]", value)
     if not parts:
-        return value.strip(), _extract_ref(value) or ""
+        return value.strip(), _extract_ref(value) or "", None
     title = parts[0].strip()
     ref_number = (parts[1] if len(parts) > 1 else parts[0]).strip()
-    return title, ref_number
+    tender_id = (parts[2] if len(parts) > 2 else "").strip() or None
+    return title, ref_number, tender_id
 
 
 def _is_boilerplate_tender_row(text: str) -> bool:
@@ -396,6 +424,14 @@ def scrape_mp_tenders(keyword: str) -> list[dict]:
     return tenders
 
 
+def scrape_mp_eproc(keyword: str) -> list[dict]:
+    return _scrape_nic_keyword_portal(
+        keyword=keyword,
+        base_url=EPROC_MP_URL,
+        portal_source="eproc.mp.gov.in",
+    )
+
+
 def scrape_mp_pwd(keyword: str) -> list[dict]:
     return _scrape_nic_keyword_portal(
         keyword=keyword,
@@ -410,7 +446,11 @@ async def scrape_gem_mp_async(keyword: str) -> list[dict]:
     tenders: list[dict] = []
     seen: set[str] = set()
     async with async_playwright() as playwright:
-        browser = await playwright.chromium.launch(headless=True)
+        # Opt into Chromium's new headless mode to avoid browser startup crashes.
+        browser = await playwright.chromium.launch(
+            headless=True,
+            channel="chromium",
+        )
         try:
             context = await browser.new_context(user_agent=USER_AGENT)
             page = await context.new_page()
@@ -542,6 +582,7 @@ def scrape_all_mp_portals(keywords: list[str] | None = None) -> list[dict]:
     tenders: list[dict] = []
     for keyword in keywords or MP_PRINT_KEYWORDS:
         tenders.extend(scrape_mp_tenders(keyword))
+        tenders.extend(scrape_mp_eproc(keyword))
         tenders.extend(scrape_mp_pwd(keyword))
         tenders.extend(scrape_gem_mp(keyword))
         tenders.extend(scrape_mpbse(keyword))

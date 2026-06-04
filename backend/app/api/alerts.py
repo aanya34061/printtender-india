@@ -3,21 +3,26 @@ from __future__ import annotations
 import secrets
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, Header, HTTPException
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, EmailStr, field_validator
 from sqlalchemy import delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.concurrency import run_in_threadpool
 
-from app.alerts.email_sender import send_welcome_email
 from app.config import get_settings
 from app.database import get_db
 from app.email_service import (
+    send_all_categories_email,
     send_confirmation_email,
+    send_test_tender_email,
     send_unsubscribe_confirmation_email,
 )
 from app.models import AlertSubscription
+from app.models import Tender
+from app.processing.relevance import build_printing_relevance_predicate
 from app.schemas import AlertSubscriptionCreate, AlertSubscriptionRead
+from app.sources import ACTIVE_TENDER_SOURCES
 
 router = APIRouter()
 
@@ -67,6 +72,14 @@ class _DeleteBody(BaseModel):
 
 def _make_token() -> str:
     return secrets.token_urlsafe(32)
+
+
+def _require_admin(authorization: str | None) -> None:
+    expected = get_settings().CRON_SECRET
+    if not expected:
+        raise HTTPException(status_code=503, detail="CRON_SECRET is not configured")
+    if expected and authorization != f"Bearer {expected}":
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
 
 @router.post("", status_code=201)
@@ -123,26 +136,128 @@ async def subscribe(
 ) -> AlertSubscriptionRead:
     token = _make_token()
     primary_keyword = payload.keywords[0]
-    alert = AlertSubscription(
-        email=str(payload.email),
-        keyword=primary_keyword,
-        whatsapp=payload.whatsapp,
-        keywords=payload.keywords,
-        states=payload.states,
-        frequency=payload.frequency,
-        token=token,
-        confirm_token=token,
-        confirmed=False,
-        is_confirmed=False,
+    email = str(payload.email)
+    result = await session.execute(
+        select(AlertSubscription).where(
+            AlertSubscription.email == email,
+            AlertSubscription.keyword == primary_keyword,
+        )
     )
-    session.add(alert)
+    alert = result.scalar_one_or_none()
+    if not isinstance(alert, AlertSubscription):
+        alert = AlertSubscription(
+            email=email,
+            keyword=primary_keyword,
+            whatsapp=payload.whatsapp,
+            keywords=payload.keywords,
+            states=payload.states,
+            frequency=payload.frequency,
+            token=token,
+            confirm_token=token,
+            confirmed=False,
+            is_confirmed=False,
+            is_active=True,
+        )
+        session.add(alert)
+    else:
+        alert.whatsapp = payload.whatsapp
+        alert.keywords = payload.keywords
+        alert.states = payload.states
+        alert.frequency = payload.frequency
+        alert.token = token
+        alert.confirm_token = token
+        alert.confirmed = False
+        alert.is_confirmed = False
+        alert.confirmed_at = None
+        alert.is_active = True
+
     await session.commit()
     await session.refresh(alert)
-    try:
-        send_welcome_email(str(payload.email), payload.keywords, payload.frequency)
-    except Exception:
-        pass
+    confirm_url = f"{get_settings().BACKEND_URL.rstrip('/')}/api/alerts/confirm/{token}"
+    confirmation_sent = await run_in_threadpool(
+        send_confirmation_email,
+        email,
+        ", ".join(payload.keywords),
+        confirm_url,
+    )
+    test_sent = await run_in_threadpool(send_test_tender_email, email, payload.keywords)
+    if not confirmation_sent or not test_sent:
+        raise HTTPException(
+            status_code=502,
+            detail="Subscription was saved, but email delivery failed. Check RESEND_API_KEY and EMAIL_FROM.",
+        )
     return AlertSubscriptionRead.model_validate(alert)
+
+
+@router.post("/send-test")
+async def send_test_to_subscribers(
+    authorization: str | None = Header(default=None),
+    session: AsyncSession = Depends(get_db),
+) -> dict[str, object]:
+    _require_admin(authorization)
+    result = await session.scalars(
+        select(AlertSubscription).where(AlertSubscription.is_active.is_(True))
+    )
+    subscribers = list(result)
+    sent = 0
+    failed: list[str] = []
+
+    for subscriber in subscribers:
+        keywords = subscriber.keywords or [subscriber.keyword or "printing"]
+        ok = await run_in_threadpool(
+            send_test_tender_email,
+            subscriber.email,
+            keywords,
+        )
+        if ok:
+            sent += 1
+        else:
+            failed.append(subscriber.email)
+
+    return {
+        "status": "completed",
+        "total_subscribers": len(subscribers),
+        "sent": sent,
+        "failed": failed,
+    }
+
+
+@router.post("/send-categories")
+async def send_categories_to_subscribers(
+    authorization: str | None = Header(default=None),
+    session: AsyncSession = Depends(get_db),
+) -> dict[str, object]:
+    _require_admin(authorization)
+    result = await session.scalars(
+        select(AlertSubscription).where(AlertSubscription.is_active.is_(True))
+    )
+    subscribers = list(result)
+    tender_rows = await session.scalars(
+        select(Tender)
+        .where(Tender.is_active.is_(True))
+        .where(Tender.portal_source.in_(ACTIVE_TENDER_SOURCES))
+        .where(Tender.bid_end_date > datetime.now(timezone.utc))
+        .where(build_printing_relevance_predicate(Tender))
+        .order_by(Tender.fetched_at.desc().nulls_last(), Tender.id.desc())
+        .limit(3)
+    )
+    tenders = list(tender_rows)
+    sent = 0
+    failed: list[str] = []
+
+    for subscriber in subscribers:
+        ok = await run_in_threadpool(send_all_categories_email, subscriber.email, tenders)
+        if ok:
+            sent += 1
+        else:
+            failed.append(subscriber.email)
+
+    return {
+        "status": "completed",
+        "total_subscribers": len(subscribers),
+        "sent": sent,
+        "failed": failed,
+    }
 
 
 @router.get("/confirm/{token}")

@@ -1,10 +1,7 @@
-import axios from "axios";
-import { AnimatePresence, motion } from "framer-motion";
 import { Bell, Check, X } from "lucide-react";
 import { useEffect, useState } from "react";
+import { fetchJSON } from "../lib/api.js";
 import { useToastStore } from "../store/toastStore.js";
-
-const BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
 
 const KEYWORDS = [
   "calendars", "diary", "sticker", "registers",
@@ -20,14 +17,16 @@ const KEYWORDS = [
 
 export default function AlertModal({ open, onClose, prefillKeyword }) {
   const [email, setEmail] = useState("");
-  const [keywords, setKeywords] = useState([prefillKeyword ?? "calendars"]);
+  const [keywords, setKeywords] = useState([prefillKeyword || "calendars"]);
   const [frequency, setFrequency] = useState("daily");
   const [status, setStatus] = useState("idle");
   const [emailErr, setEmailErr] = useState("");
+  const [submitErr, setSubmitErr] = useState("");
   const add = useToastStore((s) => s.add);
 
   useEffect(() => {
-    if (prefillKeyword) setKeywords([prefillKeyword]);
+    const keyword = prefillKeyword?.trim();
+    if (keyword) setKeywords([keyword]);
   }, [prefillKeyword]);
 
   useEffect(() => {
@@ -48,81 +47,85 @@ export default function AlertModal({ open, onClose, prefillKeyword }) {
     }
     if (keywords.length === 0) return;
     setEmailErr("");
+    setSubmitErr("");
     setStatus("saving");
     try {
-      await axios.post(`${BASE}/api/alerts`, { email, keyword: keywords[0], frequency });
+      await fetchJSON("/api/alerts/subscribe", {
+        method: "POST",
+        json: {
+          email,
+          keywords,
+          states: [],
+          frequency,
+        },
+      });
       setStatus("success");
-      add("🔔 Alert set! Check your email to confirm.", "success");
-    } catch {
+      add("Check your email for a test tender mail and confirmation link.", "success");
+    } catch (err) {
       setStatus("error");
+      setSubmitErr(err.message || "Email delivery failed. Please try again.");
     }
   }
 
   return (
-    <AnimatePresence>
-      {open && (
-        <>
-          {/* Backdrop */}
-          <motion.div
-            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-            onClick={onClose}
-            className="fixed inset-0 z-50"
-            style={{ background: "rgba(0,0,0,0.65)", backdropFilter: "blur(4px)" }}
-          />
+    open && (
+      <>
+        {/* Backdrop */}
+        <div
+          onClick={onClose}
+          className="fixed inset-0 z-50"
+          style={{ background: "rgba(0,0,0,0.65)", backdropFilter: "blur(4px)" }}
+        />
 
-          {/* Modal */}
-          <motion.div
-            initial={{ opacity: 0, scale: 0.94, y: 16 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.94, y: 16 }}
-            transition={{ type: "spring", damping: 28, stiffness: 300 }}
-            className="fixed inset-x-4 top-1/2 z-50 -translate-y-1/2 rounded-2xl shadow-card sm:inset-x-auto sm:left-1/2 sm:w-full sm:max-w-[480px] sm:-translate-x-1/2"
-            style={{ background: "var(--surface)", border: "1px solid rgba(255,255,255,0.08)" }}
+        {/* Modal */}
+        <div
+          className="fixed inset-x-3 top-1/2 z-50 max-h-[calc(100dvh-2rem)] -translate-y-1/2 overflow-y-auto rounded-2xl shadow-card sm:inset-x-auto sm:left-1/2 sm:w-full sm:max-w-[480px] sm:-translate-x-1/2"
+          style={{ background: "var(--surface)", border: "1px solid rgba(255,255,255,0.08)" }}
+        >
+          {/* Header */}
+          <div
+            className="flex items-center justify-between gap-3 px-4 py-4 sm:px-6"
+            style={{ borderBottom: "1px solid rgba(255,255,255,0.08)" }}
           >
-            {/* Header */}
-            <div
-              className="flex items-center justify-between px-6 py-4"
-              style={{ borderBottom: "1px solid rgba(255,255,255,0.08)" }}
-            >
-              <div className="flex items-center gap-2">
-                <Bell className="h-5 w-5" style={{ color: "var(--accent)" }} />
-                <h2 className="font-bold text-slate-100">Set Tender Alert</h2>
-              </div>
-              <button
-                type="button"
-                onClick={onClose}
-                className="flex h-8 w-8 items-center justify-center rounded-lg transition"
-                style={{ color: "var(--muted)" }}
-                onMouseEnter={(e) => e.currentTarget.style.color = "var(--text)"}
-                onMouseLeave={(e) => e.currentTarget.style.color = "var(--muted)"}
-              >
-                <X className="h-5 w-5" />
-              </button>
+            <div className="flex items-center gap-2">
+              <Bell className="h-5 w-5" style={{ color: "var(--accent)" }} />
+              <h2 className="text-sm font-bold text-slate-100 sm:text-base">Subscribe to Tender Mails</h2>
             </div>
+            <button
+              type="button"
+              onClick={onClose}
+              className="flex h-8 w-8 items-center justify-center rounded-lg transition"
+              style={{ color: "var(--muted)" }}
+              onMouseEnter={(e) => e.currentTarget.style.color = "var(--text)"}
+              onMouseLeave={(e) => e.currentTarget.style.color = "var(--muted)"}
+            >
+              <X className="h-5 w-5" />
+            </button>
+          </div>
 
             {/* Success state */}
-            {status === "success" ? (
-              <div className="flex flex-col items-center gap-4 p-8 text-center">
-                <div
-                  className="flex h-16 w-16 items-center justify-center rounded-full"
-                  style={{ background: "rgba(34,197,94,0.15)" }}
-                >
-                  <Check className="h-8 w-8" style={{ color: "var(--green)" }} />
-                </div>
-                <div>
-                  <p className="text-lg font-bold text-slate-100">You&apos;re subscribed!</p>
-                  <p className="mt-2 text-sm" style={{ color: "var(--muted)" }}>
-                    Check your inbox to confirm. You&apos;ll receive{" "}
-                    <span style={{ color: "var(--accent)" }}>{frequency}</span>{" "}
-                    alerts for: <span style={{ color: "var(--accent)" }}>{keywords.join(", ")}</span>
-                  </p>
-                </div>
-                <button type="button" onClick={onClose} className="btn-primary px-8 py-2">
-                  Done
-                </button>
+          {status === "success" ? (
+            <div className="flex flex-col items-center gap-4 p-8 text-center">
+              <div
+                className="flex h-16 w-16 items-center justify-center rounded-full"
+                style={{ background: "rgba(34,197,94,0.15)" }}
+              >
+                <Check className="h-8 w-8" style={{ color: "var(--green)" }} />
               </div>
-            ) : (
-              <form onSubmit={submit} className="space-y-5 p-6">
+              <div>
+                <p className="text-lg font-bold text-slate-100">Subscription created</p>
+                <p className="mt-2 text-sm" style={{ color: "var(--muted)" }}>
+                  Check your inbox for a test tender mail and confirmation link. After confirmation, you&apos;ll receive{" "}
+                  <span style={{ color: "var(--accent)" }}>{frequency}</span>{" "}
+                  tender mails for: <span style={{ color: "var(--accent)" }}>{keywords.join(", ")}</span>
+                </p>
+              </div>
+              <button type="button" onClick={onClose} className="btn-primary px-8 py-2">
+                Done
+              </button>
+            </div>
+          ) : (
+            <form onSubmit={submit} className="space-y-5 p-4 sm:p-6">
                 {/* Email */}
                 <div>
                   <label className="chip-group-label mb-2 block">Email Address</label>
@@ -142,7 +145,7 @@ export default function AlertModal({ open, onClose, prefillKeyword }) {
                 {/* Keywords */}
                 <div>
                   <label className="chip-group-label mb-2 block">
-                    Keywords
+                    Tender Keywords
                     {keywords.length === 0 && (
                       <span className="ml-1" style={{ color: "var(--red)" }}>— select at least 1</span>
                     )}
@@ -168,7 +171,7 @@ export default function AlertModal({ open, onClose, prefillKeyword }) {
                     className="flex rounded-xl p-1"
                     style={{ background: "var(--bg)", border: "1px solid rgba(255,255,255,0.08)" }}
                   >
-                    {["daily", "instant"].map((f) => (
+                    {["instant", "daily", "weekly"].map((f) => (
                       <button
                         key={f}
                         type="button"
@@ -179,7 +182,7 @@ export default function AlertModal({ open, onClose, prefillKeyword }) {
                           : { color: "var(--muted)" }
                         }
                       >
-                        {f === "daily" ? "Daily Digest" : "Instant Alert"}
+                        {f === "instant" ? "Instant" : f === "daily" ? "Daily" : "Weekly"}
                       </button>
                     ))}
                   </div>
@@ -187,7 +190,7 @@ export default function AlertModal({ open, onClose, prefillKeyword }) {
 
                 {status === "error" && (
                   <p className="rounded-lg px-3 py-2 text-xs" style={{ background: "rgba(239,68,68,0.1)", color: "var(--red)" }}>
-                    Something went wrong. Please try again.
+                    {submitErr || "Something went wrong. Please try again."}
                   </p>
                 )}
 
@@ -197,13 +200,12 @@ export default function AlertModal({ open, onClose, prefillKeyword }) {
                   className="btn-primary w-full justify-center py-3 text-sm"
                 >
                   <Bell className="h-4 w-4" />
-                  {status === "saving" ? "Subscribing…" : "Subscribe — It's Free"}
+                  {status === "saving" ? "Subscribing..." : "Subscribe for Mail Alerts"}
                 </button>
               </form>
-            )}
-          </motion.div>
-        </>
-      )}
-    </AnimatePresence>
+          )}
+        </div>
+      </>
+    )
   );
 }

@@ -1,28 +1,23 @@
 import { useQuery } from "@tanstack/react-query";
-import axios from "axios";
+import { fetchJSON } from "../lib/api.js";
 
-const BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
-
-export function useStats() {
+export function useStats(options = {}) {
   return useQuery({
     queryKey: ["stats"],
-    queryFn: async () => {
-      const { data } = await axios.get(`${BASE}/api/stats`);
-      return data;
-    },
+    queryFn: () => fetchJSON("/api/stats"),
     staleTime: 1000 * 60 * 5,
-    refetchInterval: 1000 * 60 * 5,
+    refetchInterval: options.enabled === false ? false : 1000 * 60 * 5,
+    refetchOnWindowFocus: false,
+    ...options,
   });
 }
 
 export function usePortalStatus() {
   return useQuery({
     queryKey: ["portal-status"],
-    queryFn: async () => {
-      const { data } = await axios.get(`${BASE}/api/stats/portals/status`);
-      return data;
-    },
+    queryFn: () => fetchJSON("/api/stats/portals/status"),
     staleTime: 1000 * 60 * 5,
     refetchInterval: 1000 * 60 * 5,
+    refetchOnWindowFocus: false,
   });
 }

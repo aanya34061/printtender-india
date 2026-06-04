@@ -1,7 +1,9 @@
 import xml.etree.ElementTree as ET
+from html.entities import html5
 import re
 
 import httpx
+from lxml import etree
 
 from app.fetchers.base import BaseFetcher, REQUEST_HEADERS
 from app.fetchers.aggregators import scrape_eprocure_search
@@ -44,8 +46,12 @@ class CPPPFetcher(BaseFetcher):
 
     def parse_xml(self, xml_text: str, keyword: str) -> list[dict]:
         try:
-            root = ET.fromstring(xml_text)
-        except ET.ParseError as exc:
+            sanitized = _sanitize_xml_entities(xml_text)
+            root = etree.fromstring(
+                sanitized.encode("utf-8"),
+                parser=etree.XMLParser(recover=True),
+            )
+        except (ET.ParseError, etree.XMLSyntaxError, ValueError) as exc:
             self.log_result(
                 self.portal_source, keyword, 0, 0, "error", f"XML parse failed: {exc}"
             )
@@ -120,6 +126,22 @@ class CPPPFetcher(BaseFetcher):
             compact.startswith("<html")
             and "your session in the client area has expired" in compact
         )
+
+
+ENTITY_RE = re.compile(r"&([A-Za-z][A-Za-z0-9]+);")
+
+
+def _sanitize_xml_entities(xml_text: str) -> str:
+    def replace(match: re.Match[str]) -> str:
+        name = match.group(1)
+        if name in {"amp", "lt", "gt", "apos", "quot"}:
+            return match.group(0)
+        value = html5.get(f"{name};")
+        if value is None:
+            return match.group(0)
+        return value
+
+    return ENTITY_RE.sub(replace, xml_text)
 
 
 MP_FILTER_TERMS = (

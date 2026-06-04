@@ -72,14 +72,14 @@ export default function HeroSearch() {
   );
 
   return (
-    <div className="mx-auto max-w-2xl px-6 py-12 sm:px-10">
+    <div className="mx-auto max-w-2xl px-4 py-8 sm:px-6 sm:py-12 lg:px-10">
       {/* Heading */}
-      <div className="mb-8 text-center">
-        <h1 className="text-3xl font-extrabold tracking-tight text-slate-100 sm:text-4xl">
+      <div className="mb-6 text-center sm:mb-8">
+        <h1 className="text-2xl font-extrabold tracking-tight text-slate-100 sm:text-4xl">
           Find{" "}
           <span className="text-gradient">Printing Tenders</span>
         </h1>
-        <p className="mt-3 text-sm" style={{ color: "var(--muted)" }}>
+        <p className="mt-3 text-sm leading-relaxed" style={{ color: "var(--muted)" }}>
           Live printing tender data - updated every 6 hours
         </p>
       </div>
@@ -94,7 +94,7 @@ export default function HeroSearch() {
           id="search-input"
           value={inputVal}
           onChange={handleChange}
-          className="form-input h-14 pl-12 pr-4 text-base"
+          className="form-input h-12 pl-12 pr-4 text-base sm:h-14"
           placeholder="Search by keyword, department, state…"
           aria-label="Search tenders"
         />
@@ -123,18 +123,20 @@ export default function HeroSearch() {
         <button
           type="button"
           onClick={() => setOpen((o) => !o)}
-          className="flex w-full items-center justify-between rounded-xl px-4 py-2.5 text-sm transition"
+          className="flex w-full items-center justify-between gap-3 rounded-xl px-4 py-2.5 text-left text-sm transition"
           style={{
             background: "var(--surface2)",
             border: "1.5px solid " + (open ? "var(--accent)" : "rgba(255,255,255,0.08)"),
             color: activeGroup ? "var(--accent)" : "var(--muted)",
           }}
         >
-          <span className="flex items-center gap-2">
+          <span className="flex min-w-0 items-center gap-2">
             <Tag className="h-4 w-4" />
-            {activeGroup
-              ? `${activeGroup.icon} ${activeGroup.label} — ${activeKw}`
-              : "Browse by category"}
+            <span className="truncate">
+              {activeGroup
+                ? `${activeGroup.icon} ${activeGroup.label} - ${activeKw}`
+                : "Browse by category"}
+            </span>
           </span>
           <ChevronDown
             className="h-4 w-4 transition-transform"

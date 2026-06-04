@@ -29,6 +29,7 @@ class Tender(Base):
         Index("idx_tenders_deadline", "bid_end_date"),
         Index("idx_tenders_state", "state"),
         Index("idx_tenders_portal", "portal_source"),
+        Index("idx_tenders_portal_deadline", "portal_source", "bid_end_date"),
         Index("idx_tenders_category", "category"),
         Index("idx_tenders_fts", "search_vector", postgresql_using="gin"),
         Index("idx_tenders_keywords", "keywords", postgresql_using="gin"),

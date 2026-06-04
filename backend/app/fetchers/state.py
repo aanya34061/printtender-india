@@ -6,7 +6,13 @@ import httpx
 from bs4 import BeautifulSoup
 
 from app.fetchers.base import BaseFetcher, REQUEST_HEADERS
-from app.fetchers.deeplinks import build_deep_link, extract_nic_tender_id
+from app.fetchers.deeplinks import (
+    NIC_PORTAL_BASES,
+    _nic_direct_link,
+    build_deep_link,
+    extract_nic_tender_id,
+    is_brittle_nic_direct_link,
+)
 
 
 STATE_PORTALS = {
@@ -155,17 +161,43 @@ class StateFetcher(BaseFetcher):
             nit_tag = row.find("a", href=re.compile(r"FrontEndTendersByNIT|FrontEndViewTender|DirectLink|tenderRef"))
             if nit_tag:
                 href = nit_tag.get("href", "")
-                portal_url = urljoin(base_url, href) if not href.startswith("http") else href
-                tender_id = extract_nic_tender_id(portal_url) or parsed_tender_id
-                link_verified = True
+                raw_portal_url = urljoin(base_url, href) if not href.startswith("http") else href
+                if is_brittle_nic_direct_link(raw_portal_url):
+                    tender_id = parsed_tender_id
+                    if state_code == "MH" and tender_id:
+                        portal_url = _nic_direct_link(
+                            NIC_PORTAL_BASES[portal_source], tender_id
+                        )
+                    else:
+                        portal_url = build_deep_link(
+                            portal_source, ref_number, tender_id
+                        )
+                    link_verified = bool(tender_id)
+                else:
+                    portal_url = raw_portal_url
+                    tender_id = parsed_tender_id or extract_nic_tender_id(portal_url)
+                    link_verified = True
             else:
                 # Fallback: any <a> in the row
                 any_link = row.find("a", href=True)
                 if any_link:
                     href = any_link["href"]
-                    portal_url = urljoin(base_url, href) if not href.startswith("http") else href
-                    tender_id = extract_nic_tender_id(portal_url) or parsed_tender_id
-                    link_verified = bool(tender_id)
+                    raw_portal_url = urljoin(base_url, href) if not href.startswith("http") else href
+                    if is_brittle_nic_direct_link(raw_portal_url):
+                        tender_id = parsed_tender_id
+                        if state_code == "MH" and tender_id:
+                            portal_url = _nic_direct_link(
+                                NIC_PORTAL_BASES[portal_source], tender_id
+                            )
+                        else:
+                            portal_url = build_deep_link(
+                                portal_source, ref_number, tender_id
+                            )
+                        link_verified = bool(tender_id)
+                    else:
+                        portal_url = raw_portal_url
+                        tender_id = parsed_tender_id or extract_nic_tender_id(portal_url)
+                        link_verified = bool(tender_id)
                 else:
                     tender_id = parsed_tender_id
                     portal_url = build_deep_link(portal_source, ref_number, None)

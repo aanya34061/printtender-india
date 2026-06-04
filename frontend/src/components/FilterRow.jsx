@@ -19,11 +19,28 @@ const DEADLINE_OPTS = [
 ];
 
 const VALUE_OPTS = [
-  { label: "Under ₹1 L", min: null, max: 100_000 },
-  { label: "₹1–10 L", min: 100_000, max: 1_000_000 },
-  { label: "₹10–50 L", min: 1_000_000, max: 5_000_000 },
-  { label: "₹50 L–1 Cr", min: 5_000_000, max: 10_000_000 },
-  { label: "Above ₹1 Cr", min: 10_000_000, max: null },
+  { label: "Under ₹1 Lakh", min: null, max: 100_000 },
+  { label: "₹1–10 Lakh", min: 100_000, max: 1_000_000 },
+  { label: "₹10–50 Lakh", min: 1_000_000, max: 5_000_000 },
+  { label: "₹50 Lakh–1 Crore", min: 5_000_000, max: 10_000_000 },
+  { label: "Above ₹1 Crore", min: 10_000_000, max: null },
+];
+
+const DEFAULT_PORTAL_OPTIONS = [
+  "MP Tenders",
+  "eproc.mp.gov.in",
+  "CPPP",
+  "etenders.gov.in",
+  "gem.gov.in",
+  "PNB Tenders",
+  "Canara Bank Tenders",
+  "Central Bank of India Tenders",
+  "Bank of India Tenders",
+  "Indian Bank Tenders",
+  "UCO Bank Tenders",
+  "Indian Overseas Bank Tenders",
+  "LIC Tenders",
+  "Maharashtra Tenders",
 ];
 
 export default function FilterRow() {
@@ -36,7 +53,7 @@ export default function FilterRow() {
   const portalKeys = Object.entries(stats?.by_portal ?? {})
     .filter(([, count]) => Number(count) > 0)
     .map(([name]) => name);
-  const portalOptions = Array.from(new Set(portalKeys)).sort();
+  const portalOptions = Array.from(new Set([...DEFAULT_PORTAL_OPTIONS, ...portalKeys]));
 
   useEffect(() => {
     if (portal && portalOptions.length > 0 && !portalOptions.includes(portal)) {
@@ -54,7 +71,7 @@ export default function FilterRow() {
       id="filter-row"
       style={{ borderBottom: "1px solid rgba(255,255,255,0.06)", background: "#1a1f35" }}
     >
-      <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-3 px-6 pb-2 pt-3 sm:px-10">
+      <div className="mx-auto flex max-w-6xl items-start gap-2 overflow-x-auto px-4 pb-2 pt-3 sm:flex-wrap sm:items-center sm:gap-3 sm:px-6 lg:px-10">
         <SlidersHorizontal className="h-4 w-4 shrink-0" style={{ color: "var(--muted)" }} />
 
         <FilterSelect
@@ -100,7 +117,7 @@ export default function FilterRow() {
         </FilterSelect>
 
         {activeCount > 0 && (
-          <div className="flex items-center gap-2">
+          <div className="flex shrink-0 items-center gap-2">
             <span
               className="rounded-full px-2 py-0.5 text-xs font-semibold text-white"
               style={{ background: "var(--accent)" }}
@@ -118,10 +135,8 @@ export default function FilterRow() {
           </div>
         )}
       </div>
-      <p className="mx-auto max-w-6xl px-6 pb-3 text-xs sm:px-10" style={{ color: "var(--muted)" }}>
-        {portalOptions.length > 0
-          ? `Available tender portals: ${portalOptions.join(" · ")}`
-          : "Portal filters appear when the backend has active tenders."}
+      <p className="mx-auto max-w-6xl truncate px-4 pb-3 text-xs sm:px-6 lg:px-10" style={{ color: "var(--muted)" }}>
+        {`Available tender portals: ${portalOptions.join(" · ")}`}
       </p>
     </div>
   );
@@ -132,7 +147,7 @@ function FilterSelect({ value, onChange, placeholder, children }) {
     <select
       value={value}
       onChange={(e) => onChange(e.target.value)}
-      className="form-select min-w-[140px] text-sm"
+      className="form-select min-w-[145px] shrink-0 text-sm"
     >
       <option value="">{placeholder}</option>
       {children}

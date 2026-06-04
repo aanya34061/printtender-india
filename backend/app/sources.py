@@ -15,9 +15,18 @@ NEWSPAPER_SOURCES: tuple[str, ...] = (
 )
 
 GOVERNMENT_PORTAL_SOURCES: tuple[str, ...] = (
+    "MP Tenders",
+    "eproc.mp.gov.in",
     "CPPP",
     "GeM",
-    "MP Tenders",
+    "PNB Tenders",
+    "Canara Bank Tenders",
+    "Central Bank of India Tenders",
+    "Bank of India Tenders",
+    "Indian Bank Tenders",
+    "UCO Bank Tenders",
+    "Indian Overseas Bank Tenders",
+    "LIC Tenders",
     "MP PWD",
     "MPBSE",
     "MP Forest",
@@ -38,12 +47,35 @@ PORTAL_SOURCES: tuple[str, ...] = (
     *AGGREGATOR_SOURCES,
 )
 
-ACTIVE_TENDER_SOURCES: tuple[str, ...] = (*NEWSPAPER_SOURCES, *PORTAL_SOURCES)
-ACTIVE_FETCH_SOURCES: tuple[str, ...] = (*ACTIVE_TENDER_SOURCES, "Epaper OCR")
+LIVE_PORTAL_SOURCES: tuple[str, ...] = (
+    "MP Tenders",
+    "eproc.mp.gov.in",
+    "PNB Tenders",
+    "Canara Bank Tenders",
+    "Central Bank of India Tenders",
+    "Bank of India Tenders",
+    "Indian Bank Tenders",
+    "UCO Bank Tenders",
+    "Indian Overseas Bank Tenders",
+    "LIC Tenders",
+)
+
+ACTIVE_TENDER_SOURCES: tuple[str, ...] = PORTAL_SOURCES
+ACTIVE_FETCH_SOURCES: tuple[str, ...] = (*PORTAL_SOURCES, *NEWSPAPER_SOURCES, "Epaper OCR")
 
 SOURCE_DISPLAY_ALIASES: dict[str, str] = {
+    "GeM": "gem.gov.in",
     "State-MH": "Maharashtra Tenders",
 }
+
+
+def display_source(source: str | None, portal_url: str | None = None) -> str | None:
+    if source == "CPPP":
+        url = str(portal_url or "").casefold()
+        if "etenders.gov.in" in url:
+            return "etenders.gov.in"
+        return "CPPP"
+    return canonicalize_source(source)
 
 
 def is_active_source(source: str | None) -> bool:
@@ -59,6 +91,10 @@ def canonicalize_source(source: str | None) -> str | None:
 def expand_source_filter(source: str | None) -> tuple[str, ...]:
     if not source:
         return ()
+    if source == "etenders.gov.in":
+        return ("CPPP",)
+    if source == "gem.gov.in":
+        return ("GeM",)
     if source == "Maharashtra Tenders":
         return ("Maharashtra Tenders", "State-MH")
     return (source,)

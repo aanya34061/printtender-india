@@ -52,10 +52,26 @@ def test_normaliser_value_parsing() -> None:
             raw_record("A", "Book printing", value_raw="2.5 Lakh"),
             raw_record("B", "Answer books printing", value_raw="1 Crore"),
             raw_record("C", "Digital printing", value_raw="₹ 45,000"),
+            raw_record("D", "Paper printing posted 8 May ₹3.6 L GEM service", value_raw=""),
         ]
     )
 
-    assert df["value_inr"].tolist() == [250000.0, 10000000.0]
+    assert df["value_inr"].tolist() == [250000.0, 10000000.0, 45000.0, 360000.0]
+
+
+def test_normalise_tender_extracts_value_embedded_in_heading() -> None:
+    tender = normalise_tender(
+        raw_record(
+            "TERMS",
+            "Paper-based Printing Services posted 8 May ₹3.6 L GEM Service",
+            value_raw="",
+            portal_source="TenderDekho",
+            portal_url="https://example.com/tender",
+        )
+    )
+
+    assert tender is not None
+    assert tender.value_inr == 360000.0
 
 
 def test_normaliser_state_mapping() -> None:
@@ -101,11 +117,24 @@ def test_normalise_tender_accepts_fetcher_dict() -> None:
     assert tender.link_verified is True
 
 
-def test_normalise_tender_drops_broad_printing_term_without_product_keyword() -> None:
+def test_normalise_tender_accepts_tracked_print_keyword_without_product_keyword() -> None:
     tender = normalise_tender(
         raw_record(
             "A",
             "Offset printing work",
+            portal_url="https://example.com/tender/A",
+        )
+    )
+
+    assert tender is not None
+    assert "offset printing" in tender.keywords
+
+
+def test_normalise_tender_drops_generic_printing_term_without_tracked_keyword() -> None:
+    tender = normalise_tender(
+        raw_record(
+            "A",
+            "Printing work",
             portal_url="https://example.com/tender/A",
         )
     )
@@ -137,6 +166,96 @@ def test_normalise_tender_drops_result_when_keyword_hit_is_not_in_tender_text() 
     assert tender is None
 
 
+def test_normalise_tender_drops_file_number_construction_false_positive() -> None:
+    tender = normalise_tender(
+        raw_record(
+            "MPGMC/77/26X3/3/JAN/2026-27",
+            "Construction of Community Hall and Toilet Repairs Work. Ward 09. Zone 02 File No. 77/26X3/3.",
+            portal_url="https://example.com/tender/A",
+        )
+    )
+
+    assert tender is None
+
+
+def test_normalise_tender_drops_medical_card_capacity_false_positive() -> None:
+    tender = normalise_tender(
+        raw_record(
+            "AIIMSBBN/PROC/2026-27/PAC",
+            "Automated System for Bacterial Identification and Sensitivity VITEK 2 Compact 60 Card Capacity",
+            portal_url="https://example.com/tender/A",
+        )
+        | {"organisation": "All India Institute of Medical Sciences"}
+    )
+
+    assert tender is None
+
+
+def test_normalise_tender_drops_probe_card_false_positive() -> None:
+    tender = normalise_tender(
+        raw_record(
+            "45190",
+            "Rate contract for the assembly of Epoxy Probe Cards for two years",
+            portal_url="https://example.com/tender/A",
+        )
+        | {"organisation": "Semi-Conductor Laboratory"}
+    )
+
+    assert tender is None
+
+
+def test_normalise_tender_drops_library_book_supply_false_positive() -> None:
+    tender = normalise_tender(
+        raw_record(
+            "NEIGR/SP/EMP-01/2026-27",
+            "Empanelment for supply of Library Books/Journals",
+            portal_url="https://example.com/tender/A",
+        )
+        | {"organisation": "Store and Procurement Section"}
+    )
+
+    assert tender is None
+
+
+def test_normalise_tender_drops_digital_evaluation_answer_book_false_positive() -> None:
+    tender = normalise_tender(
+        raw_record(
+            "373/STORE/BU/2026",
+            "Tender for digital evaluation system of answer books",
+            portal_url="https://example.com/tender/A",
+        )
+        | {"organisation": "Barkatullah University"}
+    )
+
+    assert tender is None
+
+
+def test_normalise_tender_drops_stationery_used_as_location() -> None:
+    tender = normalise_tender(
+        raw_record(
+            "3064",
+            "Construction of bitumen road from Kapil Stationery to Kunbi Patel Dharmshala",
+            portal_url="https://example.com/tender/A",
+        )
+        | {"organisation": "Urban Administration and Development"}
+    )
+
+    assert tender is None
+
+
+def test_normalise_tender_keeps_printed_file_covers() -> None:
+    tender = normalise_tender(
+        raw_record(
+            "CGM/BR/ENQ-34",
+            "Supply of Printed File Covers",
+            portal_url="https://example.com/tender/A",
+        )
+    )
+
+    assert tender is not None
+    assert "files" in tender.keywords
+
+
 def test_normalise_tender_uses_organisation_and_ref_for_keyword_matching() -> None:
     tender = normalise_tender(
         raw_record(
@@ -149,6 +268,24 @@ def test_normalise_tender_uses_organisation_and_ref_for_keyword_matching() -> No
 
     assert tender is not None
     assert "answer books" in tender.keywords
+
+
+def test_normalise_tender_keeps_lic_active_without_deadline() -> None:
+    raw = raw_record(
+        "LIC-STATIONERY-001",
+        "Annual contract for supply of stationery and book items",
+        portal_source="LIC Tenders",
+        portal_url="https://licindia.in/tender",
+    )
+    raw["deadline_raw"] = ""
+
+    tender = normalise_tender(
+        raw
+    )
+
+    assert tender is not None
+    assert tender.bid_end_date is None
+    assert tender.is_active is True
 
 
 def test_normaliser_drops_past_deadline_records() -> None:

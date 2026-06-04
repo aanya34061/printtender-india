@@ -4,6 +4,7 @@ from app.fetchers.deeplinks import (
     classify_link,
     extract_nic_tender_id,
     is_document_download_link,
+    is_brittle_nic_direct_link,
     is_generic_homepage_url,
     is_generic_link,
     resolve_link,
@@ -82,8 +83,15 @@ def test_gem_resolve_link_preserves_captured_direct_url():
 def test_state_mp_with_tender_id():
     link = build_deep_link("State-MP", "MP/2025/01", "S98765432")
     assert "mptenders.gov.in" in link
-    assert "sp=S98765432" in link
-    assert "FrontEndTendersByNIT" in link
+    assert "FrontEndTendersByKeyword" in link
+    assert "keyword=MP%2F2025%2F01" in link
+
+
+def test_state_mh_with_tender_id_uses_portal_search():
+    link = build_deep_link("State-MH", "MH/2025/01", "S98765432")
+    assert "mahatenders.gov.in" in link
+    assert "FrontEndTendersByKeyword" in link
+    assert "keyword=MH%2F2025%2F01" in link
 
 
 def test_state_rj_without_tender_id_uses_portal_search():
@@ -126,6 +134,8 @@ def test_classify_link_empty_is_search():
 def test_classify_link_homepage_is_search():
     assert classify_link("https://eprocure.gov.in", False) == "search"
     assert classify_link("https://eprocure.gov.in/", False) == "search"
+    assert classify_link("https://etenders.gov.in", False) == "search"
+    assert classify_link("https://etenders.gov.in/eprocure/app", False) == "search"
     assert classify_link("https://bidplus.gem.gov.in/all-bids", False) == "search"
 
 
@@ -143,6 +153,12 @@ def test_is_generic_link_identifies_homepage_and_direct_sp():
 def test_nic_link_without_sp_s_is_generic_even_with_directlink_page():
     assert is_generic_link(
         "https://mptenders.gov.in/nicgep/app?component=%24DirectLink&page=FrontEndTendersByNIT&service=direct"
+    )
+
+
+def test_brittle_nic_advanced_search_link_is_detected():
+    assert is_brittle_nic_direct_link(
+        "https://mahatenders.gov.in/nicgep/app?component=%24DirectLink_0&page=FrontEndAdvancedSearchResult&service=direct&session=T&sp=SWp8FvorQMqWExhnmC"
     )
 
 
@@ -174,6 +190,11 @@ def test_classify_link_verified_is_direct():
     assert classify_link(link, True) == "direct"
 
 
+def test_classify_link_etenders_direct_sp_is_direct_when_verified():
+    link = "https://etenders.gov.in/eprocure/app?component=%24DirectLink&page=FrontEndTendersByNIT&service=direct&session=T&sp=S12345678"
+    assert classify_link(link, True) == "direct"
+
+
 def test_classify_link_unverified_non_homepage_is_deep():
     link = "https://eprocure.gov.in/eprocure/app?component=%24DirectLink&page=FrontEndTendersByNIT&service=direct&session=T&sp=S12345678"
     assert classify_link(link, False) == "deep"
@@ -190,6 +211,7 @@ def test_classify_link_bid_details_unverified_is_deep():
 def test_generic_homepage_urls_covers_all_portals():
     required = [
         "https://eprocure.gov.in",
+        "https://etenders.gov.in",
         "https://bidplus.gem.gov.in",
         "https://mptenders.gov.in",
         "https://etender.up.nic.in",

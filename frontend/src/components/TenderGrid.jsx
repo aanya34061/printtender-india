@@ -1,9 +1,12 @@
-import { AnimatePresence, motion } from "framer-motion";
 import { ChevronLeft, ChevronRight } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
+import { useEffect } from "react";
 import EmptyState from "./EmptyState.jsx";
 import SkeletonCard from "./SkeletonCard.jsx";
-import TenderCard, { cardVariants } from "./TenderCard.jsx";
+import TenderCard from "./TenderCard.jsx";
+import { fetchTenders, TENDER_LIST_STALE_MS } from "../hooks/useTenders.js";
 import { useFilterStore } from "../store/filterStore.js";
+import { useShallow } from "zustand/react/shallow";
 
 const SORT_OPTIONS = [
   { value: "deadline_asc", label: "Deadline Soon" },
@@ -12,37 +15,80 @@ const SORT_OPTIONS = [
   { value: "value_asc", label: "Value: Low → High" },
 ];
 
-const container = {
-  hidden: {},
-  show: { transition: { staggerChildren: 0.04 } },
-};
-
 export default function TenderGrid({ data, isLoading, isError, onView, onBookmark, isBookmarked }) {
-  const { q, sort, page, setSort, setPage, categories, state } = useFilterStore();
+  const {
+    q,
+    sort,
+    page,
+    setSort,
+    setPage,
+    categories,
+    state,
+    portal,
+    deadline_within_days,
+    min_value,
+    max_value,
+    limit,
+  } = useFilterStore(
+    useShallow((s) => ({
+      q: s.q,
+      sort: s.sort,
+      page: s.page,
+      setSort: s.setSort,
+      setPage: s.setPage,
+      categories: s.categories,
+      state: s.state,
+      portal: s.portal,
+      deadline_within_days: s.deadline_within_days,
+      min_value: s.min_value,
+      max_value: s.max_value,
+      limit: s.limit,
+    })),
+  );
+  const queryClient = useQueryClient();
   const tenders = data?.tenders ?? [];
 
-  // STATE FILTER (apply first)
-  let stateFiltered = tenders;
-  const selectedStates = (() => {
-    if (!state) return [];
-    if (Array.isArray(state)) return state;
-    if (typeof state === "string" && state.trim() !== "") return [state];
-    return [];
-  })();
-  const isAllStatesSelected = selectedStates.length === 0 || selectedStates.some(s => (s || '').toString().toLowerCase() === 'all states' || (s || '').toString().toLowerCase() === 'all');
-  if (!isAllStatesSelected) {
-    stateFiltered = tenders.filter((t) => selectedStates.some((s) => (t.state || '').toLowerCase() === (s || '').toLowerCase()));
-  }
+  // Prefetch nearby pages so pagination is instant after the first response.
+  useEffect(() => {
+    if (data?.pages && page < data.pages) {
+      const pagesToPrefetch = [page + 1, page + 2].filter((p) => p <= data.pages);
+      const prefetch = () => {
+        pagesToPrefetch.forEach((nextPage) => {
+          const filters = { q, state, portal, deadline_within_days, min_value, max_value, sort, page: nextPage, limit: limit || 6 };
 
-  // Apply multi-category client-side filtering (OR semantics) after state filter
+          if (queryClient.getQueryData(["tenders", filters])) return;
+
+          queryClient.prefetchQuery({
+            queryKey: ["tenders", filters],
+            queryFn: () => fetchTenders(filters),
+            staleTime: TENDER_LIST_STALE_MS,
+          });
+        });
+      };
+
+      pagesToPrefetch.forEach((nextPage) => {
+        const filters = { q, state, portal, deadline_within_days, min_value, max_value, sort, page: nextPage, limit: limit || 6 };
+        queryClient.prefetchQuery({
+          queryKey: ["tenders", filters],
+          queryFn: () => fetchTenders(filters),
+          staleTime: TENDER_LIST_STALE_MS,
+        });
+      });
+
+      const timeoutId = window.setTimeout(prefetch, 2500);
+      return () => window.clearTimeout(timeoutId);
+    }
+  }, [data?.pages, page, q, state, portal, deadline_within_days, min_value, max_value, sort, limit, queryClient]);
+
+  // Apply multi-category client-side filtering (OR semantics)
+  // Categories are still filtered client-side as backend support is pending full multi-select integration
   const selectedCategories = categories || [];
   let displayTenders = (selectedCategories.length === 0)
-    ? stateFiltered
-    : stateFiltered.filter((t) => selectedCategories.some((cat) => (t.category || '').toLowerCase().includes(cat.toLowerCase())));
+    ? tenders
+    : tenders.filter((t) => selectedCategories.some((cat) => (t.category || '').toLowerCase().includes(cat.toLowerCase())));
 
   // Fallback safety: if client-side filters remove everything but we do have server data, show all tenders instead of empty UI
   if ((displayTenders?.length || 0) === 0 && (tenders?.length || 0) > 0) {
-    console.log && console.log('FILTERED EMPTY — falling back to all tenders');
     displayTenders = tenders;
   }
 
@@ -53,14 +99,14 @@ export default function TenderGrid({ data, isLoading, isError, onView, onBookmar
   return (
     <div className="space-y-5">
       {/* Sort bar */}
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <span className="text-sm" style={{ color: "var(--muted)" }}>
           {isLoading ? "Loading…" : `${total.toLocaleString()} result${total !== 1 ? "s" : ""}`}
         </span>
         <select
           value={sort}
           onChange={(e) => setSort(e.target.value)}
-          className="form-select h-9 px-3 text-xs"
+          className="form-select h-9 w-full px-3 text-xs sm:w-auto"
         >
           {SORT_OPTIONS.map((o) => (
             <option key={o.value} value={o.value}>{o.label}</option>
@@ -105,30 +151,22 @@ export default function TenderGrid({ data, isLoading, isError, onView, onBookmar
 
       {/* Cards grid */}
       {!isLoading && !isError && displayTenders.length > 0 && (
-        <AnimatePresence mode="wait">
-          <motion.div
-            key={`${q}-${page}-${sort}`}
-            variants={container}
-            initial="hidden"
-            animate="show"
-            className="grid gap-4 sm:grid-cols-2"
-          >
-            {displayTenders.map((t) => (
-              <TenderCard
-                key={t.id}
-                tender={t}
-                onView={onView}
-                onBookmark={onBookmark}
-                isBookmarked={isBookmarked(t.id)}
-              />
-            ))}
-          </motion.div>
-        </AnimatePresence>
+        <div key={`${q}-${page}-${sort}`} className="grid gap-4 sm:grid-cols-2">
+          {displayTenders.map((t) => (
+            <TenderCard
+              key={t.id}
+              tender={t}
+              onView={onView}
+              onBookmark={onBookmark}
+              isBookmarked={isBookmarked(t.id)}
+            />
+          ))}
+        </div>
       )}
 
       {/* Pagination */}
       {totalPages > 1 && !isLoading && (
-        <div className="flex items-center justify-center gap-1.5 pt-2">
+        <div className="flex max-w-full items-center justify-start gap-1.5 overflow-x-auto pt-2 sm:justify-center">
           <PagBtn
             disabled={page <= 1}
             onClick={() => { setPage(page - 1); window.scrollTo({ top: 0, behavior: "smooth" }); }}

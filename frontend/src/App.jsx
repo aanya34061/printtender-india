@@ -1,29 +1,33 @@
-import { useEffect, useState } from "react";
-import AlertModal from "./components/AlertModal.jsx";
-import BottomNav from "./components/BottomNav.jsx";
+import { lazy, Suspense, useEffect, useState } from "react";
 import FilterRow from "./components/FilterRow.jsx";
 import HeroSearch from "./components/HeroSearch.jsx";
 import Navbar from "./components/Navbar.jsx";
-import Sidebar from "./components/Sidebar.jsx";
 import StatsStrip from "./components/StatsStrip.jsx";
-import TenderDetailDrawer from "./components/TenderDetailDrawer.jsx";
 import TenderGrid from "./components/TenderGrid.jsx";
-import ToastContainer from "./components/ToastContainer.jsx";
 import { useBookmarks } from "./hooks/useBookmarks.js";
 import { useTenders } from "./hooks/useTenders.js";
 import { useToastStore } from "./store/toastStore.js";
-import { useFilterStore } from "./store/filterStore.js";
+import { useFilterStore, useTenderFilters } from "./store/filterStore.js";
+
+const Sidebar = lazy(() => import("./components/Sidebar.jsx"));
+const TenderDetailDrawer = lazy(() => import("./components/TenderDetailDrawer.jsx"));
+const AlertModal = lazy(() => import("./components/AlertModal.jsx"));
+const ToastContainer = lazy(() => import("./components/ToastContainer.jsx"));
 
 export default function App() {
-  const filters = useFilterStore();
+  const filters = useTenderFilters();
   const { data, isLoading, isError } = useTenders(filters);
   const { toggle, isBookmarked, list: bookmarkList } = useBookmarks();
   const add = useToastStore((s) => s.add);
+  const toastCount = useToastStore((s) => s.toasts.length);
+  const currentQuery = useFilterStore((s) => s.q);
 
   const [selectedId, setSelectedId] = useState(null);
   const [alertOpen, setAlertOpen] = useState(false);
   const [alertKeyword, setAlertKeyword] = useState(null);
   const [offline, setOffline] = useState(!navigator.onLine);
+  const [showDesktopSidebar, setShowDesktopSidebar] = useState(false);
+  const [sidebarReady, setSidebarReady] = useState(false);
 
   useEffect(() => {
     if (new URLSearchParams(window.location.search).get("confirmed") === "true") {
@@ -40,6 +44,22 @@ export default function App() {
     return () => { window.removeEventListener("online", on); window.removeEventListener("offline", off); };
   }, []);
 
+  useEffect(() => {
+    const media = window.matchMedia("(min-width: 1024px)");
+    const sync = () => setShowDesktopSidebar(media.matches);
+    sync();
+    media.addEventListener("change", sync);
+    return () => media.removeEventListener("change", sync);
+  }, []);
+
+  useEffect(() => {
+    if (!showDesktopSidebar) return;
+    const schedule = window.requestIdleCallback || ((fn) => window.setTimeout(fn, 1200));
+    const cancel = window.cancelIdleCallback || window.clearTimeout;
+    const id = schedule(() => setSidebarReady(true));
+    return () => cancel(id);
+  }, [showDesktopSidebar]);
+
   function handleBookmark(tender) {
     const wasBookmarked = isBookmarked(tender.id);
     toggle(tender);
@@ -47,7 +67,7 @@ export default function App() {
   }
 
   function openAlert(keyword) {
-    setAlertKeyword(keyword ?? filters.q);
+    setAlertKeyword(keyword ?? currentQuery);
     setAlertOpen(true);
   }
 
@@ -76,11 +96,11 @@ export default function App() {
 
       {/* ── Stats ────────────────────────────────────────────── */}
       <section style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
-        <StatsStrip />
+        <StatsStrip tenderTotal={data?.total} tenderTotalLoading={isLoading} />
       </section>
 
       {/* ── Main content ─────────────────────────────────────── */}
-      <div className="mx-auto max-w-6xl px-6 py-8 pb-24 sm:px-10 lg:flex lg:gap-8 lg:pb-8">
+      <div className="mx-auto max-w-6xl px-4 py-6 pb-8 sm:px-6 lg:flex lg:gap-8 lg:px-10 lg:py-8">
         <div className="min-w-0 flex-1">
           <TenderGrid
             data={data}
@@ -93,9 +113,13 @@ export default function App() {
         </div>
 
         {/* Sidebar — desktop only */}
-        <div className="hidden lg:block">
-          <Sidebar bookmarks={bookmarkList} onView={(t) => setSelectedId(t.id)} />
-        </div>
+        {showDesktopSidebar && sidebarReady && (
+          <Suspense fallback={null}>
+            <div className="hidden lg:block">
+              <Sidebar bookmarks={bookmarkList} onView={(t) => setSelectedId(t.id)} />
+            </div>
+          </Suspense>
+        )}
       </div>
 
       {/* ── Footer ───────────────────────────────────────────── */}
@@ -114,33 +138,39 @@ export default function App() {
       <button
         type="button"
         onClick={() => openAlert(null)}
-        className="fab-pulse fixed bottom-20 right-5 z-30 flex h-14 w-14 items-center justify-center rounded-full text-xl text-white transition hover:scale-110 lg:bottom-6 lg:right-6"
+        className="fab-pulse fixed bottom-5 right-5 z-30 flex h-14 w-14 items-center justify-center rounded-full text-xl text-white transition hover:scale-110 lg:bottom-6 lg:right-6"
         style={{ background: "var(--accent)" }}
-        aria-label="Set Alert"
+        aria-label="Subscribe to tender mails"
       >
         🔔
       </button>
 
-      {/* ── Mobile bottom nav ─────────────────────────────────── */}
-      <BottomNav
-        onAlertOpen={() => openAlert(null)}
-        bookmarkCount={bookmarkList.length}
-      />
-
       {/* ── Drawers & Modals ──────────────────────────────────── */}
-      <TenderDetailDrawer
-        tenderId={selectedId}
-        onClose={() => setSelectedId(null)}
-        onSetAlert={(kw) => { setSelectedId(null); openAlert(kw); }}
-      />
+      {selectedId && (
+        <Suspense fallback={null}>
+          <TenderDetailDrawer
+            tenderId={selectedId}
+            onClose={() => setSelectedId(null)}
+            onSetAlert={(kw) => { setSelectedId(null); openAlert(kw); }}
+          />
+        </Suspense>
+      )}
 
-      <AlertModal
-        open={alertOpen}
-        onClose={() => { setAlertOpen(false); setAlertKeyword(null); }}
-        prefillKeyword={alertKeyword}
-      />
+      {alertOpen && (
+        <Suspense fallback={null}>
+          <AlertModal
+            open={alertOpen}
+            onClose={() => { setAlertOpen(false); setAlertKeyword(null); }}
+            prefillKeyword={alertKeyword}
+          />
+        </Suspense>
+      )}
 
-      <ToastContainer />
+      {toastCount > 0 && (
+        <Suspense fallback={null}>
+          <ToastContainer />
+        </Suspense>
+      )}
     </div>
   );
 }

@@ -3,7 +3,7 @@ import resend
 from app.config import get_settings
 from app.schemas import TenderRead
 
-FROM_ADDRESS = "PrintTender India <alerts@printtender.in>"
+DEFAULT_FROM_ADDRESS = "PrintTender India <alerts@printtender.in>"
 
 
 def _configure() -> None:
@@ -14,7 +14,7 @@ def send_confirmation_email(to_email: str, keyword: str, confirm_url: str) -> No
     _configure()
     resend.Emails.send(
         {
-            "from": FROM_ADDRESS,
+            "from": get_settings().EMAIL_FROM or DEFAULT_FROM_ADDRESS,
             "to": [to_email],
             "subject": "Confirm your PrintTender India alert",
             "html": f"""
@@ -39,7 +39,7 @@ def send_welcome_email(to_email: str, keywords: list[str], frequency: str) -> No
     kw_list = ", ".join(keywords)
     resend.Emails.send(
         {
-            "from": FROM_ADDRESS,
+            "from": get_settings().EMAIL_FROM or DEFAULT_FROM_ADDRESS,
             "to": [to_email],
             "subject": "Welcome to PrintTender India Alerts",
             "text": (
@@ -65,7 +65,7 @@ def send_daily_digest(to_email: str, tenders: list[TenderRead]) -> None:
     )
     resend.Emails.send(
         {
-            "from": FROM_ADDRESS,
+            "from": get_settings().EMAIL_FROM or DEFAULT_FROM_ADDRESS,
             "to": [to_email],
             "subject": f"PrintTender Daily Digest — {len(top)} tenders",
             "html": f"""
@@ -85,7 +85,7 @@ def send_urgent_alert(to_email: str, tender: TenderRead) -> None:
     deadline = tender.bid_end_date.strftime("%d %b %Y %H:%M") if tender.bid_end_date else "soon"
     resend.Emails.send(
         {
-            "from": FROM_ADDRESS,
+            "from": get_settings().EMAIL_FROM or DEFAULT_FROM_ADDRESS,
             "to": [to_email],
             "subject": f"URGENT: {tender.title[:60]} closing {deadline}",
             "html": f"""
