@@ -4,7 +4,7 @@ import { useToastStore } from "../store/toastStore.js";
 
 function portalBadgeClass(src) {
   if (!src) return "badge badge-other";
-  if (src === "CPPP" || src === "etenders.gov.in") return "badge badge-cppp";
+  if (src === "CPPP") return "badge badge-cppp";
   if (src === "GeM" || src === "gem.gov.in") return "badge badge-gem";
   if (isMpPortal(src)) return "badge badge-mp";
   if (isBankPortal(src)) return "badge badge-bank";
@@ -98,7 +98,6 @@ function isPortalSearchFlowTender(portalSource, linkType) {
     linkType === "search" &&
     [
       "CPPP",
-      "etenders.gov.in",
       "MP Tenders",
       "eproc.mp.gov.in",
       "Maharashtra Tenders",
@@ -123,7 +122,7 @@ export default function TenderCard({ tender, onView, isBookmarked, onBookmark })
       if (host.includes("eproc.mp.gov.in")) return "eproc.mp.gov.in";
       if (host.includes("mptenders.gov.in")) return "MP Tenders";
       if (host.includes("timesofindia") || host.includes("indiatimes")) return "TOI Tenders";
-      if (host.includes("etenders.gov.in")) return "etenders.gov.in";
+      if (host.includes("etenders.gov.in")) return "CPPP";
       if (host.includes("eprocure") || host.includes("eprocure.gov.in")) return "CPPP";
       if (host.includes("gem") || host.includes("gecmart") || host.includes("gems") || host.includes("gem.gov.in")) return "gem.gov.in";
       if (host.includes("tenderdekho")) return "TenderDekho";
@@ -144,14 +143,14 @@ export default function TenderCard({ tender, onView, isBookmarked, onBookmark })
 
   async function handleApply(e) {
     e.stopPropagation();
-    if (!tender.portal_url) return;
-    const destination = tender.portal_url;
+    const destination = tender.portal_open_url || tender.portal_url;
+    if (!destination) return;
     if (usesPortalSearchFlow && tender.ref_number) {
       try {
         await navigator.clipboard.writeText(tender.ref_number);
-        add("Tender page opened and ref copied", "info");
+        add("Official portal opened and ref copied", "info");
       } catch {
-        add("Tender page opened", "info");
+        add("Official portal opened", "info");
       }
     } else if (linkType === "search") {
       const confirmed = window.confirm(
@@ -271,7 +270,7 @@ export default function TenderCard({ tender, onView, isBookmarked, onBookmark })
           }
           title={
             linkType === "newspaper" ? "This notice was published in a newspaper and may require contacting the organisation directly to apply." :
-            usesPortalSearchFlow ? "Open live tender page through portal session" :
+            usesPortalSearchFlow ? "Open official portal search and copy ref number" :
             linkType === "direct" ? `Open on ${portal}` :
             linkType === "deep"   ? `Deep link to ${portal}` :
             "Exact link unavailable — will search by ref number"

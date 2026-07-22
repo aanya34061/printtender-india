@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import re
-from urllib.parse import parse_qs, quote, quote_plus, urlparse
+from urllib.parse import parse_qs, quote, quote_plus, unquote_plus, urlparse
 
 NIC_PORTAL_BASES: dict[str, str] = {
     "CPPP": "https://eprocure.gov.in/eprocure/app",
     "CPPP-eTenders": "https://etenders.gov.in/eprocure/app",
     "MP Tenders": "https://mptenders.gov.in/nicgep/app",
     "eproc.mp.gov.in": "https://eproc.mp.gov.in/nicgep/app",
-    "MP PWD": "https://mpeprocurement.gov.in/nicgep/app",
+    "MP PWD": "https://mptenders.gov.in/nicgep/app",
     "UP Tenders": "https://etender.up.nic.in/nicgep/app",
     "Maharashtra Tenders": "https://mahatenders.gov.in/nicgep/app",
     "Rajasthan Tenders": "https://sppp.rajasthan.gov.in/app",
@@ -76,33 +76,31 @@ TENDER_IDENTIFIER_RE = re.compile(
     r"(?:[?&]sp=S[^&\s]+|bid-details|showbidDocument|tenderRef|NIT|DirectLink)",
     flags=re.IGNORECASE,
 )
-NIC_PORTAL_HOSTS = frozenset(urlparse(base).netloc for base in NIC_PORTAL_BASES.values())
+NIC_PORTAL_HOSTS = frozenset(
+    urlparse(base).netloc for base in NIC_PORTAL_BASES.values()
+)
 NIC_DIRECT_SP_RE = re.compile(r"[?&]sp=S[^&\s\"']+", flags=re.IGNORECASE)
 NIC_BRITTLE_DIRECT_RE = re.compile(
     r"(?:[?&]component=%24DirectLink_0(?:[&#]|$)|[?&]page=FrontEndAdvancedSearchResult(?:[&#]|$))",
     flags=re.IGNORECASE,
 )
 GEM_ALL_BIDS_URL = "https://bidplus.gem.gov.in/all-bids"
-GEM_DOCUMENT_PATH_RE = re.compile(r"(?:^|/)showbidDocument/\d+(?:[?#].*)?$", flags=re.IGNORECASE)
-NIC_SEARCH_ONLY_PORTALS = frozenset(
-    {
-        "CPPP",
-        "CPPP-eTenders",
-        "MP Tenders",
-        "eproc.mp.gov.in",
-        "State-MP",
-        "MP",
-        "UP Tenders",
-        "State-UP",
-        "UP",
-        "Maharashtra Tenders",
-        "State-MH",
-        "MH",
-        "Rajasthan Tenders",
-        "State-RJ",
-        "RJ",
-    }
+GEM_DOCUMENT_PATH_RE = re.compile(
+    r"(?:^|/)showbidDocument/\d+(?:[?#].*)?$", flags=re.IGNORECASE
 )
+GEM_REFERENCE_RE = re.compile(r"\bGEM/\d{4}/[A-Z]+/\d+\b", flags=re.IGNORECASE)
+NIC_STABLE_TENDER_ID_RE = re.compile(
+    r"^\d{4}_[A-Z0-9]+(?:_\d+){1,2}$", flags=re.IGNORECASE
+)
+AGGREGATOR_OFFICIAL_PORTAL_MARKERS: dict[str, str] = {
+    "EPROCURE-ANDHRA_PRADESH": "https://tender.apeprocurement.gov.in",
+    "EPROCURE-TELANGANA": "https://eprocurement.telangana.gov.in",
+    "EPROCURE-MADHYA_PRADESH": NIC_PORTAL_BASES["State-MP"],
+    "EPROCURE-MAHARASHTRA": NIC_PORTAL_BASES["State-MH"],
+    "EPROCURE-UTTAR_PRADESH": NIC_PORTAL_BASES["State-UP"],
+    "EPROCURE-RAJASTHAN": NIC_PORTAL_BASES["State-RJ"],
+    "EPROCURE-CPPP": NIC_PORTAL_BASES["CPPP"],
+}
 
 
 def is_generic_link(url: str | None) -> bool:
@@ -149,9 +147,10 @@ def is_document_download_link(url: str | None) -> bool:
     if not cleaned:
         return False
     parsed = urlparse(cleaned)
-    return parsed.netloc.endswith("bidplus.gem.gov.in") and GEM_DOCUMENT_PATH_RE.search(
-        parsed.path
-    ) is not None
+    return (
+        parsed.netloc.endswith("bidplus.gem.gov.in")
+        and GEM_DOCUMENT_PATH_RE.search(parsed.path) is not None
+    )
 
 
 def build_deep_link(portal: str, ref_number: str, tender_id: str | None = None) -> str:
@@ -159,11 +158,15 @@ def build_deep_link(portal: str, ref_number: str, tender_id: str | None = None) 
     ref = (ref_number or "").strip()
     tid = (tender_id or "").strip()
 
+    if tid and tid.startswith("http"):
+        return tid
+
     if portal_name in NIC_PORTAL_BASES:
         base = NIC_PORTAL_BASES[portal_name]
-        if tid and portal_name not in NIC_SEARCH_ONLY_PORTALS:
-            return _nic_direct_link(base, tid)
-        return _nic_search_link(base, ref)
+        # NIC ``sp=`` values are opaque, session-bound tokens. A stable tender
+        # id such as 2026_DC_505875_1 must therefore be searched, not inserted
+        # into a fabricated DirectLink (which always opens "Stale Session").
+        return _nic_search_link(base, nic_search_term(ref, tid))
 
     if portal_name == "GeM":
         direct_href = (
@@ -179,7 +182,9 @@ def build_deep_link(portal: str, ref_number: str, tender_id: str | None = None) 
 
     if portal_name in {"TenderDekho", "Tender Dekho"}:
         if tid:
-            return f"https://tenderdekho.com/tender/{quote(_last_path_part(tid))}"
+            last = _last_path_part(tid)
+            path_prefix = "tender-detail" if last.startswith("td-") else "tender"
+            return f"https://tenderdekho.com/{path_prefix}/{quote(last)}"
         if ref:
             return f"https://tenderdekho.com/tenders?search={quote_plus(ref)}"
 
@@ -198,6 +203,56 @@ def build_deep_link(portal: str, ref_number: str, tender_id: str | None = None) 
     return f"https://www.google.com/search?q={quote_plus(query)}"
 
 
+def infer_official_link_from_aggregator(
+    portal: str | None,
+    ref_number: str | None,
+    tender_id: str | None = None,
+    *,
+    title: str | None = None,
+    organisation: str | None = None,
+    state: str | None = None,
+) -> str | None:
+    """Infer an official portal target for aggregator rows.
+
+    Aggregators often expose useful tender text but not an exact source URL.  In
+    those cases, prefer the official portal search/homepage over the aggregator
+    detail page.  Return None when no official source marker is identifiable.
+    """
+    if portal not in {"TenderDekho", "Tender Dekho", "BidAssist", "Bid Assist"}:
+        return None
+
+    text = " ".join(
+        part.strip()
+        for part in (
+            ref_number or "",
+            title or "",
+            organisation or "",
+            state or "",
+        )
+        if part and part.strip()
+    )
+    if not text:
+        return None
+
+    gem_ref = GEM_REFERENCE_RE.search(text)
+    if gem_ref:
+        return build_deep_link("GeM", gem_ref.group(0).upper(), tender_id)
+    if _has_gem_marker(text):
+        search_term = _aggregator_search_term(ref_number, title, organisation)
+        return f"{GEM_ALL_BIDS_URL}?search_bid={quote_plus(search_term)}"
+
+    normalized = _aggregator_marker_text(text)
+    for marker, official_url in AGGREGATOR_OFFICIAL_PORTAL_MARKERS.items():
+        if _aggregator_marker_text(marker) in normalized:
+            if official_url in NIC_PORTAL_BASES.values():
+                return _nic_search_link(
+                    official_url,
+                    _aggregator_search_term(ref_number, title, organisation),
+                )
+            return official_url
+    return None
+
+
 def resolve_link(
     portal: str,
     ref_number: str,
@@ -208,6 +263,8 @@ def resolve_link(
     """Return a usable URL and its link_type."""
     url = (captured_url or "").strip()
     if is_generic_link(url):
+        if _is_aggregator_official_fallback(portal, url):
+            return url, classify_link(url, False)
         url = build_deep_link(portal, ref_number, tender_id)
         return url, classify_link(url, False)
     return url, classify_link(url, captured_direct)
@@ -219,6 +276,27 @@ def extract_nic_tender_id(url: str) -> str | None:
     return m.group(1) if m else None
 
 
+def is_stable_nic_tender_id(value: str | None) -> bool:
+    return stable_nic_tender_id(value) is not None
+
+
+def stable_nic_tender_id(value: str | None) -> str | None:
+    tid = (value or "").strip()
+    if NIC_STABLE_TENDER_ID_RE.fullmatch(tid):
+        return tid
+    if tid.startswith("S") and NIC_STABLE_TENDER_ID_RE.fullmatch(tid[1:]):
+        return tid[1:]
+    return None
+
+
+def nic_search_term(ref_number: str | None, tender_id: str | None) -> str:
+    """Prefer the stable NIC tender id; never search with an opaque sp token."""
+    stable_id = stable_nic_tender_id(tender_id)
+    if stable_id:
+        return stable_id
+    return (ref_number or "").strip()
+
+
 def has_nic_direct_sp(url: str | None) -> bool:
     return NIC_DIRECT_SP_RE.search(url or "") is not None
 
@@ -228,7 +306,10 @@ def is_brittle_nic_direct_link(url: str | None) -> bool:
     if not cleaned:
         return False
     parsed = urlparse(cleaned)
-    return _is_nic_host(parsed.netloc) and NIC_BRITTLE_DIRECT_RE.search(cleaned) is not None
+    return (
+        _is_nic_host(parsed.netloc)
+        and NIC_BRITTLE_DIRECT_RE.search(cleaned) is not None
+    )
 
 
 def classify_link(url: str, link_verified: bool) -> str:
@@ -243,7 +324,12 @@ def classify_link(url: str, link_verified: bool) -> str:
 
 
 def _nic_direct_link(base: str, tender_id: str) -> str:
-    sp_value = tender_id if tender_id.upper().startswith("S") else f"S{tender_id}"
+    decoded_tender_id = unquote_plus(tender_id.strip())
+    sp_value = (
+        decoded_tender_id
+        if decoded_tender_id.upper().startswith("S")
+        else f"S{decoded_tender_id}"
+    )
     return (
         f"{base}?component=%24DirectLink&page=FrontEndTendersByNIT"
         f"&service=direct&session=T&sp={quote_plus(sp_value)}"
@@ -265,14 +351,20 @@ def _is_search_fallback(url: str | None) -> bool:
         return True
     if parsed.query and "FrontEndTendersByKeyword" in parsed.query:
         return True
-    if parsed.netloc.endswith("tenderdekho.com") and parsed.path.rstrip("/") == "/tenders":
+    if (
+        parsed.netloc.endswith("tenderdekho.com")
+        and parsed.path.rstrip("/") == "/tenders"
+    ):
         return True
     return False
 
 
 def _is_nic_host(netloc: str) -> bool:
     host = netloc.casefold()
-    return any(host == nic_host or host.endswith(f".{nic_host}") for nic_host in NIC_PORTAL_HOSTS)
+    return any(
+        host == nic_host or host.endswith(f".{nic_host}")
+        for nic_host in NIC_PORTAL_HOSTS
+    )
 
 
 def _is_aggregator_listing(netloc: str, path: str) -> bool:
@@ -295,6 +387,16 @@ def _is_aggregator_detail(netloc: str, path: str) -> bool:
     if host.endswith("tenderdekho.com"):
         return lowered_path.startswith(("tender/", "tender-detail/"))
     return False
+
+
+def _is_aggregator_official_fallback(portal: str | None, url: str | None) -> bool:
+    if portal not in {"TenderDekho", "Tender Dekho", "BidAssist", "Bid Assist"}:
+        return False
+    parsed = urlparse(url or "")
+    if not parsed.scheme or not parsed.netloc:
+        return False
+    host = parsed.netloc.casefold()
+    return not host.endswith(("tenderdekho.com", "bidassist.com"))
 
 
 def _last_path_part(value: str) -> str:
@@ -362,3 +464,51 @@ def _normalise_gem_document_id(value: str) -> str | None:
     if not re.fullmatch(r"\d+", text):
         return None
     return f"https://bidplus.gem.gov.in/showbidDocument/{text}"
+
+
+def _has_gem_marker(text: str) -> bool:
+    return re.search(r"(?<![A-Z0-9])GEM(?:\s+(?:Goods|Service|Bid|RA)\b|\b)", text, flags=re.IGNORECASE) is not None
+
+
+def _aggregator_marker_text(text: str) -> str:
+    return re.sub(r"[^A-Z0-9]+", "_", text.upper())
+
+
+def _aggregator_search_term(
+    ref_number: str | None, title: str | None, organisation: str | None
+) -> str:
+    ref = (ref_number or "").strip()
+    if ref and not _is_low_quality_aggregator_ref(ref):
+        return ref
+
+    phrase = " ".join((title or "").split())
+    for marker in (
+        " Match Details ",
+        " Category:",
+        " Deadline ",
+        " View Details",
+    ):
+        if marker in phrase:
+            phrase = phrase.split(marker, 1)[0].strip()
+    if " Posted " in phrase:
+        before_posted = phrase.split(" Posted ", 1)[0].strip()
+        if len(before_posted) >= 12:
+            phrase = before_posted
+    if phrase:
+        return phrase[:140].strip()
+
+    org = " ".join((organisation or "").split())
+    return (org or ref or "printing tender")[:140].strip()
+
+
+def _is_low_quality_aggregator_ref(ref_number: str) -> bool:
+    ref = ref_number.strip()
+    if not ref:
+        return True
+    if re.fullmatch(r"TD-[A-Z0-9]+", ref, flags=re.IGNORECASE):
+        return True
+    if re.fullmatch(r"\d{4}", ref):
+        return True
+    if re.fullmatch(r"[A-Z][A-Z\s-]{2,40}", ref, flags=re.IGNORECASE):
+        return True
+    return False

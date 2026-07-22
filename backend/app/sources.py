@@ -47,21 +47,14 @@ PORTAL_SOURCES: tuple[str, ...] = (
     *AGGREGATOR_SOURCES,
 )
 
-LIVE_PORTAL_SOURCES: tuple[str, ...] = (
-    "MP Tenders",
-    "eproc.mp.gov.in",
-    "PNB Tenders",
-    "Canara Bank Tenders",
-    "Central Bank of India Tenders",
-    "Bank of India Tenders",
-    "Indian Bank Tenders",
-    "UCO Bank Tenders",
-    "Indian Overseas Bank Tenders",
-    "LIC Tenders",
-)
+LIVE_PORTAL_SOURCES: tuple[str, ...] = PORTAL_SOURCES
 
 ACTIVE_TENDER_SOURCES: tuple[str, ...] = PORTAL_SOURCES
-ACTIVE_FETCH_SOURCES: tuple[str, ...] = (*PORTAL_SOURCES, *NEWSPAPER_SOURCES, "Epaper OCR")
+ACTIVE_FETCH_SOURCES: tuple[str, ...] = (
+    *PORTAL_SOURCES,
+    *NEWSPAPER_SOURCES,
+    "Epaper OCR",
+)
 
 SOURCE_DISPLAY_ALIASES: dict[str, str] = {
     "GeM": "gem.gov.in",
@@ -71,9 +64,6 @@ SOURCE_DISPLAY_ALIASES: dict[str, str] = {
 
 def display_source(source: str | None, portal_url: str | None = None) -> str | None:
     if source == "CPPP":
-        url = str(portal_url or "").casefold()
-        if "etenders.gov.in" in url:
-            return "etenders.gov.in"
         return "CPPP"
     return canonicalize_source(source)
 

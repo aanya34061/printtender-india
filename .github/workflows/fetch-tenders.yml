@@ -46,7 +46,13 @@ jobs:
           async def main() -> None:
               await create_tables()
               await run_startup_migrations()
-              count = await run_fetch_cycle()
+              # Bound each scheduled run so slow public portals are not flooded
+              # with every spelling variant at once.  Priority terms cover the
+              # printing/stationery categories and complete inside the job limit.
+              count = await run_fetch_cycle(
+                  max_keywords_per_source=12,
+                  include_newspapers=False,
+              )
               print(f"FETCHED_NEW_TENDERS={count}")
 
           asyncio.run(main())

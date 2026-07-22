@@ -3,6 +3,7 @@ from app.fetchers.deeplinks import (
     build_deep_link,
     classify_link,
     extract_nic_tender_id,
+    infer_official_link_from_aggregator,
     is_document_download_link,
     is_brittle_nic_direct_link,
     is_generic_homepage_url,
@@ -14,11 +15,18 @@ from app.fetchers.deeplinks import (
 # ── build_deep_link ────────────────────────────────────────────────────────
 
 
-def test_cppp_with_tender_id_uses_direct_link():
+def test_cppp_opaque_sp_token_falls_back_to_reference_search():
     link = build_deep_link("CPPP", "CPPP/2025/04/123", "S12345678")
     assert "eprocure.gov.in" in link
-    assert "sp=S12345678" in link
-    assert "FrontEndTendersByNIT" in link
+    assert "FrontEndTendersByKeyword" in link
+    assert "keyword=CPPP%2F2025%2F04%2F123" in link
+    assert "sp=" not in link
+
+
+def test_nic_encoded_sp_token_is_not_used_as_a_search_term():
+    link = build_deep_link("CPPP", "CPPP/2025/04/123", "SRFFZzSyc5%3D%3D")
+    assert "keyword=CPPP%2F2025%2F04%2F123" in link
+    assert "SRFFZzSyc5" not in link
 
 
 def test_cppp_without_tender_id_uses_portal_keyword_search():
@@ -47,7 +55,9 @@ def test_gem_with_captured_document_id_uses_showbid_document():
 
 def test_gem_with_tender_id_does_not_construct_bid_details():
     link = build_deep_link("GeM", "GEM/2025/B/12345", "GEM-2025-B-12345")
-    assert link == "https://bidplus.gem.gov.in/all-bids?search_bid=GEM%2F2025%2FB%2F12345"
+    assert (
+        link == "https://bidplus.gem.gov.in/all-bids?search_bid=GEM%2F2025%2FB%2F12345"
+    )
     assert "bid-details" not in link
 
 
@@ -81,17 +91,24 @@ def test_gem_resolve_link_preserves_captured_direct_url():
 
 
 def test_state_mp_with_tender_id():
-    link = build_deep_link("State-MP", "MP/2025/01", "S98765432")
+    link = build_deep_link("State-MP", "MP/2025/01", "2026_DOP_98765_1")
     assert "mptenders.gov.in" in link
     assert "FrontEndTendersByKeyword" in link
-    assert "keyword=MP%2F2025%2F01" in link
+    assert "keyword=2026_DOP_98765_1" in link
 
 
-def test_state_mh_with_tender_id_uses_portal_search():
-    link = build_deep_link("State-MH", "MH/2025/01", "S98765432")
+def test_state_mh_with_tender_id_uses_stable_id_search():
+    link = build_deep_link("State-MH", "MH/2025/01", "2026_DOP_98765_1")
     assert "mahatenders.gov.in" in link
     assert "FrontEndTendersByKeyword" in link
-    assert "keyword=MH%2F2025%2F01" in link
+    assert "keyword=2026_DOP_98765_1" in link
+
+
+def test_state_mh_strips_directlink_s_prefix_for_stable_id_search():
+    link = build_deep_link("State-MH", "MH/2025/01", "S2026_MSBSH_1300024_2")
+    assert "mahatenders.gov.in" in link
+    assert "FrontEndTendersByKeyword" in link
+    assert "keyword=2026_MSBSH_1300024_2" in link
 
 
 def test_state_rj_without_tender_id_uses_portal_search():
@@ -176,6 +193,34 @@ def test_tenderdekho_without_slug_uses_site_search():
 def test_tenderdekho_with_slug_uses_tender_path():
     link = build_deep_link("TenderDekho", "TD-REF-001", "some-tender-slug")
     assert link == "https://tenderdekho.com/tender/some-tender-slug"
+
+
+def test_tenderdekho_gem_marker_infers_official_gem_search():
+    link = infer_official_link_from_aggregator(
+        "TenderDekho",
+        "BAREILLY",
+        "td-2iULMkDygQ",
+        title="LIC Life Insurance Corporation Printing Forms Tender Bareilly Uttar Pradesh 2026 GEM Service",
+        organisation="LIC Life Insurance Corporation",
+        state="Uttar Pradesh",
+    )
+
+    assert link is not None
+    assert link.startswith("https://bidplus.gem.gov.in/all-bids?search_bid=")
+    assert "TenderDekho" not in link
+
+
+def test_tenderdekho_eprocure_marker_infers_state_portal():
+    link = infer_official_link_from_aggregator(
+        "TenderDekho",
+        "EPROCURE-TELANGANA",
+        "td-1bkhmzJwqg",
+        title="Supply and printing of receipt books EPROCURE-TELANGANA Goods",
+        organisation="Not Specified",
+        state="Telangana",
+    )
+
+    assert link == "https://eprocurement.telangana.gov.in"
 
 
 def test_classify_link_google_is_search():

@@ -81,12 +81,14 @@ BANK_PORTALS: dict[str, BankPortal] = {
     ),
     "Indian Bank Tenders": BankPortal(
         source="Indian Bank Tenders",
-        url="https://indianbank.bank.in/tenders/",
+        # The English /tenders endpoint currently stalls at the CDN; this
+        # official language route serves the same tender cards reliably.
+        url="https://indianbank.bank.in/HI/tender/",
         organisation="Indian Bank",
     ),
     "UCO Bank Tenders": BankPortal(
         source="UCO Bank Tenders",
-        url="https://www.uco.bank.in/tenders",
+        url="https://www.uco.bank.in/en/tenders",
         organisation="UCO Bank",
     ),
     "Indian Overseas Bank Tenders": BankPortal(
@@ -117,7 +119,8 @@ class BankPortalFetcher(BaseFetcher):
             elif self.portal.mode == "lic_table":
                 tenders = self._fetch_lic_table(keyword)
             else:
-                html = _fetch_html(self.portal.url)
+                timeout = 8 if self.portal.source == "Indian Bank Tenders" else 30
+                html = _fetch_html(self.portal.url, timeout=timeout)
                 if self.portal.source == "PNB Tenders":
                     tenders = self._parse_pnb_html(html, keyword)
                 else:
@@ -321,13 +324,19 @@ class BankPortalFetcher(BaseFetcher):
             tender_id = item.get("tenderId")
             portal_url = self.portal.url
             if tender_id:
-                documents = _fetch_canara_documents(str(tender_id))
+                try:
+                    documents = _fetch_canara_documents(str(tender_id))
+                except httpx.HTTPError:
+                    # The public document endpoint intermittently rejects cloud
+                    # IPs.  Keep the tender row instead of failing the full
+                    # Canara source; a future refresh can fill the exact PDF.
+                    documents = []
                 if documents:
                     portal_url = urljoin(self.portal.url, documents[0])
 
-            ref_number = _compact_ws(str(item.get("tenderRefNo") or "")) or _extract_reference(
-                text, portal_url
-            )
+            ref_number = _compact_ws(
+                str(item.get("tenderRefNo") or "")
+            ) or _extract_reference(text, portal_url)
             if ref_number.casefold() in seen:
                 continue
             seen.add(ref_number.casefold())
@@ -335,8 +344,12 @@ class BankPortalFetcher(BaseFetcher):
             tenders.append(
                 self.build_record(
                     ref_number=ref_number,
-                    title=_compact_ws(str(item.get("descriptionEnglish") or ref_number)),
-                    organisation=_compact_ws(str(item.get("issuedBy") or self.portal.organisation)),
+                    title=_compact_ws(
+                        str(item.get("descriptionEnglish") or ref_number)
+                    ),
+                    organisation=_compact_ws(
+                        str(item.get("issuedBy") or self.portal.organisation)
+                    ),
                     state=self.portal.state,
                     portal_source=self.portal.source,
                     deadline_raw=str(item.get("lastDate") or ""),
@@ -368,7 +381,9 @@ class BankPortalFetcher(BaseFetcher):
                 continue
             if not doc_link:
                 continue
-            portal_url = urljoin(self.portal.url, str(doc_link.get("href") or "").strip())
+            portal_url = urljoin(
+                self.portal.url, str(doc_link.get("href") or "").strip()
+            )
             if ref_number.casefold() in seen:
                 continue
             seen.add(ref_number.casefold())
@@ -379,7 +394,11 @@ class BankPortalFetcher(BaseFetcher):
                     organisation=self.portal.organisation,
                     state=self.portal.state,
                     portal_source=self.portal.source,
-                    deadline_raw=_compact_ws(deadline_cell.get_text(" ", strip=True)) if deadline_cell else "",
+                    deadline_raw=(
+                        _compact_ws(deadline_cell.get_text(" ", strip=True))
+                        if deadline_cell
+                        else ""
+                    ),
                     value_raw="",
                     portal_url=portal_url,
                     keyword_hit=keyword,
@@ -390,7 +409,7 @@ class BankPortalFetcher(BaseFetcher):
         return tenders
 
 
-def _fetch_html(url: str) -> str:
+def _fetch_html(url: str, *, timeout: float = 30) -> str:
     cached = HTML_CACHE.get(url)
     now = time.time()
     if cached and now - cached[0] < HTML_CACHE_TTL_SECONDS:
@@ -401,7 +420,9 @@ def _fetch_html(url: str) -> str:
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "en-IN,en;q=0.9",
     }
-    with httpx.Client(timeout=30, follow_redirects=True, headers=headers) as client:
+    with httpx.Client(
+        timeout=timeout, follow_redirects=True, headers=headers
+    ) as client:
         response = client.get(url)
         response.raise_for_status()
         html = response.text
@@ -589,8 +610,10 @@ def _extract_reference(text: str, portal_url: str) -> str:
         if not match:
             continue
         candidate = (
-            match.group(match.lastindex) if match.lastindex else match.group(0)
-        ).strip().upper()
+            (match.group(match.lastindex) if match.lastindex else match.group(0))
+            .strip()
+            .upper()
+        )
         if candidate in REFERENCE_STOPWORDS:
             continue
         if pattern is REF_PATTERNS[1] and not re.search(r"[\d/_-]", candidate):

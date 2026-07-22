@@ -102,12 +102,41 @@ NON_PRINT_PRODUCT_TERMS: tuple[str, ...] = (
     "probe card",
     "probe cards",
     "card capacity",
+    "network card",
+    "network cards",
+    "memory card",
+    "memory cards",
+    "sd card",
+    "syphilis card",
+    "dengue card",
+    "pabx",
+    "cctv",
+    "cctv systems",
+    "real estate",
+    "ssl certificate",
+    "ssl certificates",
+    "groceries",
+    "ration",
+    "stationary battery",
+    "stationary batteries",
+    "stationary engine",
+    "stationary engines",
+    "stationary generator",
+    "stationary generators",
+    "stationary pump",
+    "stationary pumps",
+    "stationary crane",
+    "stationary lead-acid",
+    "stationary vrla",
     "library books",
     "library book",
     "books/journals",
     "book/journal",
     "digital evaluation",
     "evaluation system",
+    "click here to re-login",
+    "eprocurement system",
+    "hindi news",
 )
 
 AMBIGUOUS_KEYWORDS: frozenset[str] = frozenset(
@@ -163,6 +192,20 @@ def matched_print_keywords(text: str, keyword_hit: object = None) -> set[str]:
 
 
 def is_printing_relevant_text(text: str, keywords: Iterable[str] | None = None) -> bool:
+    normalized = " ".join((text or "").casefold().split())
+    if not normalized or len(normalized) < 6:
+        return False
+    if any(
+        noise in normalized
+        for noise in (
+            "click here to re-login",
+            "eprocurement system government",
+            "hindi news",
+            "your session in the client area has expired",
+        )
+    ):
+        return False
+
     matched = set(keywords or matched_print_keywords(text))
     if not matched:
         return False
@@ -176,9 +219,11 @@ def is_printing_relevant_text(text: str, keywords: Iterable[str] | None = None) 
     has_non_print_product = any(
         contains_phrase(text, term) for term in NON_PRINT_PRODUCT_TERMS
     )
+    if has_civil_work or has_non_print_product:
+        return False
     if has_print_service:
         return True
-    return has_product and has_context and not has_civil_work and not has_non_print_product
+    return has_product and has_context
 
 
 def extract_relevant_print_keywords(

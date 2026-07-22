@@ -5,9 +5,9 @@ import time
 from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any, Literal
-from urllib.parse import quote, urljoin, urlparse
+from urllib.parse import quote, urlencode, urljoin, urlparse
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import HTMLResponse
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy import Select, asc, desc, func, select, text, or_
@@ -21,12 +21,16 @@ from app.fetchers.deeplinks import (
     classify_link,
     extract_nic_tender_id,
     has_nic_direct_sp,
-    is_document_download_link,
+    infer_official_link_from_aggregator,
     is_brittle_nic_direct_link,
     is_generic_link,
+    stable_nic_tender_id,
 )
 from app.models import Tender
-from app.processing.relevance import build_printing_relevance_predicate, is_printing_relevant_text
+from app.processing.relevance import (
+    build_printing_relevance_predicate,
+    is_printing_relevant_text,
+)
 from app.processing.value_parser import extract_value_text, parse_value
 from app.schemas import TenderRead
 from app.sources import (
@@ -43,7 +47,7 @@ router = APIRouter()
 SortOption = Literal["deadline_asc", "newest", "value_desc", "value_asc"]
 PORTAL_PROXY_TTL_SECONDS = 20 * 60
 PORTAL_PROXY_SESSIONS: dict[str, dict[str, Any]] = {}
-LIST_CACHE_TTL_SECONDS = 300
+LIST_CACHE_TTL_SECONDS = 30
 LIST_TENDER_CACHE: dict[tuple[Any, ...], tuple[float, dict[str, Any]]] = {}
 NATIONAL_BANK_TENDER_SOURCES = {
     "PNB Tenders",
@@ -59,10 +63,13 @@ PORTAL_BASES = {
     "CPPP": "https://eprocure.gov.in/eprocure/app",
     "MP Tenders": "https://mptenders.gov.in/nicgep/app",
     "eproc.mp.gov.in": "https://eproc.mp.gov.in/nicgep/app",
+    "MP PWD": "https://mptenders.gov.in/nicgep/app",
     "State-MP": "https://mptenders.gov.in/nicgep/app",
+    "State-UP": "https://etender.up.nic.in/nicgep/app",
     "Maharashtra Tenders": "https://mahatenders.gov.in/nicgep/app",
     "State-MH": "https://mahatenders.gov.in/nicgep/app",
 }
+PORTAL_VIEW_SOURCES = frozenset(PORTAL_BASES)
 
 
 def list_fallback_tenders(**kwargs):
@@ -90,26 +97,78 @@ def _visible_value_inr(tender: Any) -> float:
     return parse_value(embedded)
 
 
-def _serialize_tender(t: Tender) -> dict:
+def _resolved_public_tender_url(
+    *,
+    portal_source: str,
+    ref_number: str | None,
+    tender_id: str | None,
+    raw_url: str,
+    link_verified: bool,
+    title: str | None,
+    organisation: str | None,
+    state: str | None,
+) -> tuple[str, bool]:
+    url = raw_url
+    verified = link_verified
+    rebuild_tid = tender_id
+    if is_brittle_nic_direct_link(url) and rebuild_tid == extract_nic_tender_id(url):
+        rebuild_tid = None
+
+    # NIC DirectLinks (containing sp=S...) frequently cause "Session Timeout".
+    if is_generic_link(url) or has_nic_direct_sp(url):
+        url = build_deep_link(portal_source, ref_number or "", rebuild_tid)
+        verified = False
+
+    official_url = infer_official_link_from_aggregator(
+        portal_source,
+        ref_number,
+        tender_id,
+        title=title,
+        organisation=organisation,
+        state=state,
+    )
+    if official_url:
+        return official_url, False
+
+    return url, verified
+
+
+def _portal_launch_url(
+    request: Request | None,
+    portal_source: str,
+    ref_number: str | None,
+    tender_id: str | None,
+) -> str | None:
+    if request is None:
+        return None
+    source = canonicalize_source(portal_source)
+    if source not in PORTAL_BASES:
+        return None
+    params = {"portal_source": source}
+    if ref_number:
+        params["ref_number"] = ref_number
+    if tender_id:
+        params["tender_id"] = tender_id
+    return f"{request.url_for('portal_launch')}?{urlencode(params)}"
+
+
+def _serialize_tender(t: Tender, request: Request | None = None) -> dict:
     """Convert ORM Tender to dict, always with a usable link and link_type."""
     # Fast path for serialization without Pydantic validation for every row in a list
     raw_portal_source = t.portal_source or ""
     raw_url = (t.portal_url or "").strip()
-    url = raw_url
     tid = getattr(t, "tender_id", None)
-    verified = getattr(t, "link_verified", False)
-    rebuild_tid = tid
-    if is_brittle_nic_direct_link(url) and rebuild_tid == extract_nic_tender_id(url):
-        rebuild_tid = None
-
-    # RE-RESOLVE BRITTLE LINKS: If it's a generic link OR a brittle NIC DirectLink, rebuild it.
-    # NIC DirectLinks (containing sp=S...) frequently cause 'Session Timeout'.
-    if is_generic_link(url) or has_nic_direct_sp(url):
-        url = build_deep_link(raw_portal_source, t.ref_number, rebuild_tid)
-        verified = False
-    elif raw_portal_source == "GeM" and is_document_download_link(url):
-        url = build_deep_link("GeM", t.ref_number, None)
-        verified = False
+    verified = bool(getattr(t, "link_verified", False))
+    url, verified = _resolved_public_tender_url(
+        portal_source=raw_portal_source,
+        ref_number=t.ref_number,
+        tender_id=tid,
+        raw_url=raw_url,
+        link_verified=verified,
+        title=t.title,
+        organisation=t.organisation,
+        state=t.state,
+    )
 
     return {
         "id": t.id,
@@ -124,6 +183,9 @@ def _serialize_tender(t: Tender) -> dict:
         "bid_end_date": t.bid_end_date,
         "published_date": t.published_date,
         "portal_url": url,
+        "portal_open_url": _portal_launch_url(
+            request, raw_portal_source, t.ref_number, tid
+        ),
         "tender_id": tid,
         "link_type": classify_link(url, verified),
         "link_verified": verified,
@@ -186,6 +248,7 @@ def _prune_portal_proxy_sessions() -> None:
 
 def _cache_key_for_tender_list(
     *,
+    request_base_url: str | None = None,
     q: str,
     state: str | None,
     portal: str | None,
@@ -198,6 +261,7 @@ def _cache_key_for_tender_list(
     limit: int,
 ) -> tuple[Any, ...]:
     return (
+        request_base_url,
         q.strip(),
         state,
         portal,
@@ -222,14 +286,23 @@ def _get_cached_tender_list(cache_key: tuple[Any, ...]) -> dict[str, Any] | None
     return deepcopy(payload)
 
 
-def _set_cached_tender_list(cache_key: tuple[Any, ...], payload: dict[str, Any]) -> None:
-    LIST_TENDER_CACHE[cache_key] = (time.time() + LIST_CACHE_TTL_SECONDS, deepcopy(payload))
+def _set_cached_tender_list(
+    cache_key: tuple[Any, ...], payload: dict[str, Any]
+) -> None:
+    LIST_TENDER_CACHE[cache_key] = (
+        time.time() + LIST_CACHE_TTL_SECONDS,
+        deepcopy(payload),
+    )
+
+
+def clear_tender_list_cache() -> None:
+    LIST_TENDER_CACHE.clear()
 
 
 def _has_open_deadline(tender: Tender) -> bool:
     deadline = tender.bid_end_date
     if deadline is None:
-        return False
+        return True
     if deadline.tzinfo is None:
         deadline = deadline.replace(tzinfo=timezone.utc)
     return deadline > datetime.now(timezone.utc)
@@ -260,30 +333,90 @@ def _extract_portal_search_payload(html: str) -> dict[str, str]:
     }
 
 
-def _build_portal_session(portal_source: str, ref_number: str) -> tuple[str, str]:
+def _portal_search_terms(ref_number: str, tender_id: str | None) -> list[str]:
+    stable_id = stable_nic_tender_id(tender_id)
+    if stable_id:
+        return [stable_id]
+    return [ref_number.strip()] if ref_number.strip() else []
+
+
+def _matching_portal_detail_link(
+    html: str, *, base_url: str, expected_terms: list[str]
+) -> str | None:
+    soup = BeautifulSoup(html, "lxml")
+    candidates: list[tuple[str, str]] = []
+    for anchor in soup.find_all("a", href=True):
+        href = str(anchor.get("href") or "").strip()
+        if not href:
+            continue
+        lowered_href = href.casefold()
+        if not any(
+            marker in lowered_href
+            for marker in ("directlink", "frontendtendersbynit", "frontendviewtender")
+        ):
+            continue
+        context = " ".join(
+            (anchor.find_parent("tr") or anchor.parent or anchor).get_text(
+                " ", strip=True
+            ).split()
+        )
+        candidates.append((context, urljoin(base_url, href)))
+
+    for expected in expected_terms:
+        needle = expected.casefold()
+        for context, href in candidates:
+            if needle and needle in context.casefold():
+                return href
+    if len(candidates) == 1:
+        return candidates[0][1]
+    return None
+
+
+def _search_portal_detail(
+    client: httpx.Client,
+    *,
+    base_url: str,
+    ref_number: str,
+    tender_id: str | None,
+) -> str:
+    expected_terms = _portal_search_terms(ref_number, tender_id)
+    if not expected_terms:
+        raise HTTPException(status_code=404, detail="Tender identifier is missing")
+
+    for search_term in expected_terms:
+        home = client.get(base_url)
+        home.raise_for_status()
+        payload = _extract_portal_search_payload(home.text)
+        payload["SearchDescription"] = search_term
+        payload["Go"] = payload.get("Go") or "Go"
+        result = client.post(base_url, data=payload)
+        result.raise_for_status()
+        matching_link = _matching_portal_detail_link(
+            result.text,
+            base_url=base_url,
+            expected_terms=expected_terms,
+        )
+        if matching_link:
+            return matching_link
+
+    raise HTTPException(status_code=404, detail="Tender page not found on portal")
+
+
+def _build_portal_session(
+    portal_source: str, ref_number: str, tender_id: str | None = None
+) -> tuple[str, str]:
     base_url = PORTAL_BASES.get(portal_source)
     if not base_url:
         raise HTTPException(status_code=400, detail="Portal proxy not supported")
 
-    with httpx.Client(timeout=30, follow_redirects=True) as client:
-        home = client.get(base_url)
-        home.raise_for_status()
-        payload = _extract_portal_search_payload(home.text)
-        payload["SearchDescription"] = ref_number
-        payload["Go"] = payload.get("Go") or "Go"
-        result = client.post(base_url, data=payload)
-        result.raise_for_status()
-        soup = BeautifulSoup(result.text, "lxml")
-        matching_link = None
-        for anchor in soup.find_all("a", href=True):
-            context = " ".join(anchor.parent.get_text(" ", strip=True).split())
-            if ref_number.casefold() in context.casefold():
-                matching_link = anchor.get("href")
-                break
-        if not matching_link:
-            raise HTTPException(status_code=404, detail="Tender page not found on portal")
-
-        detail_url = urljoin(base_url, str(matching_link))
+    timeout = httpx.Timeout(12, connect=5)
+    with httpx.Client(timeout=timeout, follow_redirects=True) as client:
+        detail_url = _search_portal_detail(
+            client,
+            base_url=base_url,
+            ref_number=ref_number,
+            tender_id=tender_id,
+        )
         detail = client.get(detail_url)
         detail.raise_for_status()
 
@@ -297,30 +430,21 @@ def _build_portal_session(portal_source: str, ref_number: str) -> tuple[str, str
         return token, detail.text
 
 
-def _resolve_portal_detail_url(portal_source: str, ref_number: str) -> tuple[str, str]:
+def _resolve_portal_detail_url(
+    portal_source: str, ref_number: str, tender_id: str | None = None
+) -> tuple[str, str]:
     base_url = PORTAL_BASES.get(portal_source)
     if not base_url:
         raise HTTPException(status_code=400, detail="Portal launch not supported")
 
-    with httpx.Client(timeout=30, follow_redirects=True) as client:
-        home = client.get(base_url)
-        home.raise_for_status()
-        payload = _extract_portal_search_payload(home.text)
-        payload["SearchDescription"] = ref_number
-        payload["Go"] = payload.get("Go") or "Go"
-        result = client.post(base_url, data=payload)
-        result.raise_for_status()
-        soup = BeautifulSoup(result.text, "lxml")
-        matching_link = None
-        for anchor in soup.find_all("a", href=True):
-            context = " ".join(anchor.parent.get_text(" ", strip=True).split())
-            if ref_number.casefold() in context.casefold():
-                matching_link = anchor.get("href")
-                break
-        if not matching_link:
-            raise HTTPException(status_code=404, detail="Tender page not found on portal")
-
-        detail_url = urljoin(base_url, str(matching_link))
+    timeout = httpx.Timeout(12, connect=5)
+    with httpx.Client(timeout=timeout, follow_redirects=True) as client:
+        detail_url = _search_portal_detail(
+            client,
+            base_url=base_url,
+            ref_number=ref_number,
+            tender_id=tender_id,
+        )
         detail = client.get(detail_url)
         detail.raise_for_status()
 
@@ -342,7 +466,9 @@ def _proxy_same_origin_links(html: str, *, token: str, portal_origin: str) -> st
             if urlparse(resolved).netloc != urlparse(portal_origin).netloc:
                 node[attr] = resolved
                 continue
-            node[attr] = f"/api/tenders/portal-proxy/{token}?url={quote(resolved, safe='')}"
+            node[attr] = (
+                f"/api/tenders/portal-proxy/{token}?url={quote(resolved, safe='')}"
+            )
 
     for tag, attr in (("link", "href"), ("script", "src"), ("img", "src")):
         for node in soup.find_all(tag):
@@ -354,17 +480,18 @@ def _proxy_same_origin_links(html: str, *, token: str, portal_origin: str) -> st
     return str(soup)
 
 
-def _portal_proxy_response(portal_source: str, ref_number: str) -> HTMLResponse:
-    if portal_source not in {"CPPP", "MP Tenders", "eproc.mp.gov.in", "Maharashtra Tenders"}:
+def _portal_proxy_response(
+    portal_source: str, ref_number: str, tender_id: str | None = None
+) -> HTMLResponse:
+    if portal_source not in PORTAL_VIEW_SOURCES:
         raise HTTPException(status_code=400, detail="Portal proxy not supported")
-    token, html = _build_portal_session(portal_source, ref_number)
+    token, html = _build_portal_session(portal_source, ref_number, tender_id)
     portal_origin = PORTAL_PROXY_SESSIONS[token]["portal_origin"]
     proxied = _proxy_same_origin_links(html, token=token, portal_origin=portal_origin)
     return HTMLResponse(content=proxied)
 
 
-def _portal_launch_html(portal_origin: str, detail_url: str) -> str:
-    warmup_url = f"{portal_origin}/nicgep/app"
+def _portal_launch_html(portal_origin: str, detail_url: str, warmup_url: str) -> str:
     warmup_js = json.dumps(warmup_url)
     detail_js = json.dumps(detail_url)
     portal_origin_js = json.dumps(portal_origin)
@@ -452,19 +579,20 @@ def _build_base(
         tsq = func.plainto_tsquery("english", q)
         ilike_pattern = f"%{q}%"
         # array_to_string keywords to match freeform q against keywords list
-        keywords_text = func.array_to_string(Tender.keywords, ' ')
+        keywords_text = func.array_to_string(Tender.keywords, " ")
         qry = qry.where(
-            (
-                Tender.search_vector.op("@@")(tsq)
-            )
+            (Tender.search_vector.op("@@")(tsq))
             | (Tender.title.ilike(ilike_pattern))
             | (Tender.organisation.ilike(ilike_pattern))
             | (keywords_text.ilike(ilike_pattern))
         )
 
-    deadline_predicate = (
-        (Tender.bid_end_date > now)
-        & (Tender.bid_end_date <= now + text(f"interval '{deadline_within_days} days'"))
+    deadline_predicate = or_(
+        Tender.bid_end_date.is_(None),
+        (
+            (Tender.bid_end_date > now)
+            & (Tender.bid_end_date <= now + text(f"interval '{deadline_within_days} days'"))
+        ),
     )
     qry = qry.where(deadline_predicate).where(Tender.is_active.is_(True))
     qry = qry.where(Tender.portal_source.in_(ACTIVE_TENDER_SOURCES))
@@ -477,17 +605,8 @@ def _build_base(
             )
         )
     if portal:
-        if portal == "etenders.gov.in":
+        if portal in {"CPPP", "etenders.gov.in"}:
             qry = qry.where(Tender.portal_source == "CPPP")
-            qry = qry.where(Tender.portal_url.ilike("%etenders.gov.in%"))
-        elif portal == "CPPP":
-            qry = qry.where(Tender.portal_source == "CPPP")
-            qry = qry.where(
-                or_(
-                    Tender.portal_url.is_(None),
-                    ~Tender.portal_url.ilike("%etenders.gov.in%"),
-                )
-            )
         else:
             qry = qry.where(Tender.portal_source.in_(expand_source_filter(portal)))
     if category:
@@ -525,9 +644,13 @@ async def count_tenders(
     max_value: float | None = None,
     session: AsyncSession = Depends(get_db),
 ) -> dict[str, int]:
-    qry = _build_base(q, state, portal, category, deadline_within_days, min_value, max_value)
+    qry = _build_base(
+        q, state, portal, category, deadline_within_days, min_value, max_value
+    )
     try:
-        count = await session.scalar(select(func.count()).select_from(qry.subquery())) or 0
+        count = (
+            await session.scalar(select(func.count()).select_from(qry.subquery())) or 0
+        )
     except (OSError, SQLAlchemyError, TimeoutError) as exc:
         print(f"count_tenders fallback: {type(exc).__name__}: {exc!r}")
         count = 0
@@ -537,21 +660,35 @@ async def count_tenders(
 @router.get("/portal-launch", response_class=HTMLResponse)
 async def portal_launch(
     portal_source: str,
-    ref_number: str,
+    ref_number: str = "",
+    tender_id: str | None = None,
 ) -> HTMLResponse:
+    source = canonicalize_source(portal_source) or portal_source
+    base_url = PORTAL_BASES.get(source or "", "https://mptenders.gov.in/nicgep/app")
+    portal_origin = f"{urlparse(base_url).scheme}://{urlparse(base_url).netloc}"
     try:
-        portal_origin, detail_url = _resolve_portal_detail_url(
-            canonicalize_source(portal_source),
-            ref_number.strip(),
-        )
-        return HTMLResponse(content=_portal_launch_html(portal_origin, detail_url))
-    except httpx.HTTPError:
-        raise HTTPException(status_code=502, detail="Unable to open portal tender page")
+        if source in PORTAL_BASES:
+            _, detail_url = _resolve_portal_detail_url(
+                source,
+                ref_number.strip(),
+                tender_id,
+            )
+            return HTMLResponse(
+                content=_portal_launch_html(portal_origin, detail_url, base_url)
+            )
+    except Exception:
+        pass
+
+    fallback_url = build_deep_link(source, ref_number, tender_id)
+    return HTMLResponse(
+        content=_portal_launch_html(portal_origin, fallback_url, base_url)
+    )
 
 
 @router.get("")
 async def list_tenders(
     response: Response,
+    request: Request,
     q: str = Query(default=""),
     state: str | None = None,
     portal: str | None = None,
@@ -564,8 +701,9 @@ async def list_tenders(
     limit: int = Query(default=20, ge=1, le=50),
     session: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
-    response.headers["Cache-Control"] = "public, max-age=300, stale-while-revalidate=3600"
+    response.headers["Cache-Control"] = "no-store"
     cache_key = _cache_key_for_tender_list(
+        request_base_url=str(request.base_url),
         q=q,
         state=state,
         portal=portal,
@@ -584,6 +722,7 @@ async def list_tenders(
     try:
         payload = await _build_tender_list_payload(
             session=session,
+            request=request,
             q=q,
             state=state,
             portal=portal,
@@ -615,6 +754,7 @@ async def list_tenders(
 async def _build_tender_list_payload(
     *,
     session: AsyncSession,
+    request: Request | None = None,
     q: str,
     state: str | None,
     portal: str | None,
@@ -626,7 +766,9 @@ async def _build_tender_list_payload(
     page: int,
     limit: int,
 ) -> dict[str, Any]:
-    qry = _build_base(q, state, portal, category, deadline_within_days, min_value, max_value)
+    qry = _build_base(
+        q, state, portal, category, deadline_within_days, min_value, max_value
+    )
     offset = (page - 1) * limit
     sorted_qry = _apply_sort(qry, sort)
 
@@ -643,7 +785,7 @@ async def _build_tender_list_payload(
         return {"tenders": [], "total": 0, "page": page, "pages": 1}
 
     total = rows[0].total_count
-    tenders = [_serialize_tender(row[0]) for row in rows]
+    tenders = [_serialize_tender(row[0], request) for row in rows]
     pages = max(1, -(-total // limit))
     return {"tenders": tenders, "total": total, "page": page, "pages": pages}
 
@@ -713,7 +855,7 @@ async def prewarm_tender_list_cache() -> None:
 
 @router.get("/{tender_id}")
 async def get_tender(
-    tender_id: int, session: AsyncSession = Depends(get_db)
+    tender_id: int, request: Request, session: AsyncSession = Depends(get_db)
 ) -> dict[str, Any]:
     try:
         tender = await session.get(Tender, tender_id)
@@ -731,24 +873,25 @@ async def get_tender(
         # Apply the same link logic as in list
         raw_portal_source = tender.portal_source or ""
         raw_url = (tender.portal_url or "").strip()
-        url = raw_url
         tid = getattr(tender, "tender_id", None)
-        verified = getattr(tender, "link_verified", False)
-        rebuild_tid = tid
-        if is_brittle_nic_direct_link(url) and rebuild_tid == extract_nic_tender_id(url):
-            rebuild_tid = None
-
-        # RE-RESOLVE BRITTLE LINKS: If it's a generic link OR a brittle NIC DirectLink, rebuild it.
-        if is_generic_link(url) or has_nic_direct_sp(url):
-            url = build_deep_link(raw_portal_source, tender.ref_number, rebuild_tid)
-            verified = False
-        elif raw_portal_source == "GeM" and is_document_download_link(url):
-            url = build_deep_link("GeM", tender.ref_number, None)
-            verified = False
+        verified = bool(getattr(tender, "link_verified", False))
+        url, verified = _resolved_public_tender_url(
+            portal_source=raw_portal_source,
+            ref_number=tender.ref_number,
+            tender_id=tid,
+            raw_url=raw_url,
+            link_verified=verified,
+            title=tender.title,
+            organisation=tender.organisation,
+            state=tender.state,
+        )
 
         data["portal_source"] = display_source(raw_portal_source, raw_url)
         data["value_inr"] = _visible_value_inr(tender)
         data["portal_url"] = url
+        data["portal_open_url"] = _portal_launch_url(
+            request, raw_portal_source, tender.ref_number, tid
+        )
         data["link_type"] = classify_link(url, verified)
         data["apply_steps"] = _apply_steps(tender.portal_source, tender.state)
         return data
@@ -779,6 +922,7 @@ async def open_tender_portal_view(
             raise HTTPException(status_code=404, detail="Tender not found")
         portal_source = canonicalize_source(tender.portal_source or "")
         ref_number = tender.ref_number or ""
+        portal_tender_id = tender.tender_id
     except HTTPException:
         raise
     except (OSError, SQLAlchemyError, TimeoutError):
@@ -787,14 +931,28 @@ async def open_tender_portal_view(
             raise HTTPException(status_code=404, detail="Tender not found")
         portal_source = canonicalize_source(str(tender.get("portal_source") or ""))
         ref_number = str(tender.get("ref_number") or "")
+        portal_tender_id = str(tender.get("tender_id") or "") or None
 
-    if portal_source not in {"CPPP", "MP Tenders", "eproc.mp.gov.in", "Maharashtra Tenders"}:
+    if portal_source not in PORTAL_VIEW_SOURCES:
         raise HTTPException(status_code=400, detail="Portal proxy not supported")
 
     try:
-        return _portal_proxy_response(portal_source, ref_number)
+        return _portal_proxy_response(portal_source, ref_number, portal_tender_id)
+    except HTTPException as exc:
+        if exc.status_code != 404:
+            raise
     except httpx.HTTPError:
-        raise HTTPException(status_code=502, detail="Unable to open portal tender page")
+        pass
+
+    # Exact proxying can be blocked by a government portal or its WAF.  Keep
+    # the click useful by warming the official domain and redirecting to its
+    # unique tender-id/reference search instead of returning a dead 404/502.
+    base_url = PORTAL_BASES[portal_source]
+    portal_origin = f"{urlparse(base_url).scheme}://{urlparse(base_url).netloc}"
+    fallback_url = build_deep_link(portal_source, ref_number, portal_tender_id)
+    return HTMLResponse(
+        content=_portal_launch_html(portal_origin, fallback_url, base_url)
+    )
 
 
 @router.get("/portal-proxy/{token}", response_class=HTMLResponse)
@@ -819,5 +977,7 @@ async def portal_proxy_follow(token: str, url: str) -> HTMLResponse:
         payload["cookies"] = dict(client.cookies.items())
         payload["created_at"] = time.time()
 
-    proxied = _proxy_same_origin_links(response.text, token=token, portal_origin=portal_origin)
+    proxied = _proxy_same_origin_links(
+        response.text, token=token, portal_origin=portal_origin
+    )
     return HTMLResponse(content=proxied)

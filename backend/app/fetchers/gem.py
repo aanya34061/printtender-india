@@ -1,14 +1,15 @@
 # Run: playwright install chromium --with-deps before first use
 import asyncio
+import json
 import random
 import re
 import threading
-from urllib.parse import quote_plus, urljoin
+from typing import Any
+from urllib.parse import urljoin
 
-from playwright.async_api import TimeoutError as PlaywrightTimeoutError
-from playwright.async_api import async_playwright
+import httpx
 
-from app.fetchers.base import BaseFetcher, USER_AGENT
+from app.fetchers.base import BaseFetcher, REQUEST_HEADERS
 from app.fetchers.deeplinks import build_deep_link, is_document_download_link
 
 GEM_GENERIC_TEXT_RE = re.compile(
@@ -16,7 +17,7 @@ GEM_GENERIC_TEXT_RE = re.compile(
     r"corrigendum|boq|ra details?|seller details?|ra no(?::.*)?)$",
     flags=re.IGNORECASE,
 )
-GEM_REFERENCE_RE = re.compile(r"\bGEM/\d{4}/[A-Z]/\d+\b", flags=re.IGNORECASE)
+GEM_REFERENCE_RE = re.compile(r"\bGEM/\d{4}/[A-Z]+/\d+\b", flags=re.IGNORECASE)
 
 GEM_FIELD_LABELS = (
     "Bid Title",
@@ -43,45 +44,107 @@ class GeMFetcher(BaseFetcher):
 
     def fetch(self, keyword: str) -> list[dict]:
         try:
-            return _run_async(self._fetch_async(keyword))
+            tenders = self._fetch_official_data(keyword)
+            self.log_result(
+                self.portal_source, keyword, len(tenders), len(tenders), "success"
+            )
+            return tenders
         except Exception as exc:
             self.log_result(self.portal_source, keyword, 0, 0, "error", str(exc))
             return []
 
-    async def _fetch_async(self, keyword: str) -> list[dict]:
-        tenders: list[dict] = []
-        async with async_playwright() as playwright:
-            # Opt into Chromium's new headless mode to avoid browser startup crashes.
-            browser = await playwright.chromium.launch(
-                headless=True,
-                channel="chromium",
+    def _fetch_official_data(self, keyword: str) -> list[dict]:
+        """Fetch GeM's public JSON data request used by the official bids page."""
+        self.wait_between_requests()
+        headers = {
+            **REQUEST_HEADERS,
+            "Accept": "application/json, text/javascript, */*; q=0.01",
+            "Referer": self.url,
+            "X-Requested-With": "XMLHttpRequest",
+        }
+        with httpx.Client(timeout=25, follow_redirects=True, headers=headers) as client:
+            page = client.get(self.url)
+            page.raise_for_status()
+            csrf_match = re.search(
+                r"csrf_bd_gem_nk['\"]?\s*:\s*['\"]([^'\"]+)",
+                page.text,
             )
-            try:
-                context = await browser.new_context(user_agent=USER_AGENT)
-                page = await context.new_page()
-                await asyncio.sleep(random.uniform(2, 4))
-                await page.goto(
-                    f"{self.url}?search_bid={quote_plus(keyword)}",
-                    wait_until="domcontentloaded",
-                    timeout=60000,
-                )
-                if not await self._wait_for_results(page):
-                    self.log_result(self.portal_source, keyword, 0, 0, "success")
-                    return []
-                tenders = await self._extract_results(page, keyword)
-                self.log_result(
-                    self.portal_source, keyword, len(tenders), len(tenders), "success"
-                )
-                return tenders
-            finally:
-                await browser.close()
+            if csrf_match is None:
+                raise RuntimeError("GeM CSRF token not found")
 
-    async def _wait_for_results(self, page) -> bool:
-        try:
-            await page.wait_for_selector(", ".join(self.selectors), timeout=15000)
-            return True
-        except PlaywrightTimeoutError:
-            return False
+            payload = {
+                "param": {"searchBid": keyword, "searchType": "fullText"},
+                "filter": {
+                    "bidStatusType": "ongoing_bids",
+                    "byType": "all",
+                    "highBidValue": "",
+                    "byEndDate": {"from": "", "to": ""},
+                    "sort": "Bid-End-Date-Oldest",
+                },
+            }
+            response = client.post(
+                "https://bidplus.gem.gov.in/all-bids-data",
+                data={
+                    "payload": json.dumps(payload, separators=(",", ":")),
+                    "csrf_bd_gem_nk": csrf_match.group(1),
+                },
+            )
+            response.raise_for_status()
+            body = response.json()
+
+        if body.get("code") != 200:
+            raise RuntimeError(f"GeM data request failed: {body.get('code')!r}")
+        docs = body.get("response", {}).get("response", {}).get("docs", [])
+        if not isinstance(docs, list):
+            return []
+
+        tenders: list[dict] = []
+        seen: set[str] = set()
+        for doc in docs:
+            if not isinstance(doc, dict):
+                continue
+            bid_number = _gem_text(doc.get("b_bid_number"))
+            document_id = _gem_text(doc.get("b_id"))
+            if not bid_number or not document_id or bid_number.casefold() in seen:
+                continue
+            seen.add(bid_number.casefold())
+
+            categories = _gem_text(doc.get("b_category_name"))
+            boq_title = _gem_text(doc.get("bbt_title"))
+            title = _compact_ws(" - ".join(filter(None, (categories, boq_title))))
+            if title:
+                title = f"Procurement of {title}"
+            title = _finalize_gem_title(title, bid_number, keyword)
+            organisation = _compact_ws(
+                " - ".join(
+                    filter(
+                        None,
+                        (
+                            _gem_text(doc.get("ba_official_details_minName")),
+                            _gem_text(doc.get("ba_official_details_deptName")),
+                        ),
+                    )
+                )
+            )
+            portal_url = f"https://bidplus.gem.gov.in/showbidDocument/{document_id}"
+            tenders.append(
+                self.build_record(
+                    ref_number=bid_number,
+                    title=title,
+                    organisation=organisation,
+                    state="India",
+                    portal_source=self.portal_source,
+                    deadline_raw=_gem_text(doc.get("final_end_date_sort")),
+                    value_raw=_gem_text(
+                        doc.get("b_bid_value") or doc.get("estimated_bid_value")
+                    ),
+                    portal_url=portal_url,
+                    keyword_hit=keyword,
+                    tender_id=document_id,
+                    link_verified=True,
+                )
+            )
+        return tenders
 
     async def _extract_results(self, page, keyword: str) -> list[dict]:
         locators = [
@@ -164,7 +227,7 @@ class GeMFetcher(BaseFetcher):
 
     @staticmethod
     def _extract_bid_number(text: str) -> str | None:
-        match = re.search(r"\bGEM/\d{4}/B/\d+\b", text, flags=re.IGNORECASE)
+        match = re.search(r"\bGEM/\d{4}/[A-Z]+/\d+\b", text, flags=re.IGNORECASE)
         return match.group(0) if match else None
 
     @staticmethod
@@ -190,6 +253,16 @@ class GeMFetcher(BaseFetcher):
 
 def _compact_ws(text: str) -> str:
     return " ".join((text or "").split())
+
+
+def _gem_text(value: Any) -> str:
+    while isinstance(value, (list, tuple)):
+        if not value:
+            return ""
+        value = value[0]
+    if value is None:
+        return ""
+    return _compact_ws(str(value))
 
 
 def _run_async(coro):

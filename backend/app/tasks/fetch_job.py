@@ -2,7 +2,7 @@ import asyncio
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert
 
 from app.config import get_settings
@@ -24,6 +24,38 @@ from app.processing.deduplicator import deduplicate_tenders
 from app.processing.normaliser import normalise_tender
 from app.sources import ACTIVE_TENDER_SOURCES
 from app.tasks.celery_app import celery_app
+
+SCHEDULED_MAIL_COOLDOWN = timedelta(hours=23)
+FAST_FETCH_KEYWORD_LIMIT = 4
+FAST_FETCH_KEYWORD_PRIORITY = (
+    "printing",
+    "stationery",
+    "books",
+    "forms",
+    "envelopes",
+    "certificates",
+    "calendars",
+    "brochures",
+    "paper",
+    "cards",
+    "offset printing",
+    "digital printing",
+)
+DEFAULT_SOURCE_TIMEOUT_SECONDS = 50
+MAX_CONCURRENT_PORTAL_REQUESTS = 8
+SOURCE_TIMEOUT_SECONDS = {
+    "GeM": 65,
+    "MP Tenders": 60,
+    "CPPP": 55,
+    "PNB Tenders": 45,
+    "Indian Bank Tenders": 35,
+    "UCO Bank Tenders": 45,
+    "MPBSE": 45,
+    "MP Forest": 45,
+    "MP Info": 45,
+    "TenderDekho": 55,
+    "BidAssist": 35,
+}
 
 
 def _scrape_cppp(keyword: str) -> list[dict]:
@@ -62,8 +94,39 @@ def _dedupe_keywords(keywords: list[str]) -> list[str]:
     return deduped
 
 
+def _select_keywords(
+    keywords: tuple[str, ...] | list[str], max_keywords: int | None
+) -> tuple[str, ...] | list[str]:
+    if max_keywords is None:
+        return keywords
+
+    selected: list[str] = []
+    seen: set[str] = set()
+    available = {keyword.casefold(): keyword for keyword in keywords}
+    for priority in FAST_FETCH_KEYWORD_PRIORITY:
+        keyword = available.get(priority.casefold())
+        if keyword is None or keyword.casefold() in seen:
+            continue
+        selected.append(keyword)
+        seen.add(keyword.casefold())
+        if len(selected) >= max_keywords:
+            return selected
+
+    for keyword in keywords:
+        key = keyword.casefold()
+        if key in seen:
+            continue
+        selected.append(keyword)
+        seen.add(key)
+        if len(selected) >= max_keywords:
+            break
+    return selected
+
+
 MP_TENDERS_KEYWORDS = _dedupe_keywords(
     [
+        "printing",
+        "stationery",
         *IMAGE_PRODUCT_KEYWORDS,
         "calendar",
         "book",
@@ -170,6 +233,29 @@ PORTAL_SCRAPERS = (
 )
 
 
+def _build_portal_fetch_specs(
+    source_labels: set[str] | None,
+    max_keywords_per_source: int | None,
+) -> list[tuple[str, object, str]]:
+    selected_by_source: list[tuple[str, object, tuple[str, ...]]] = []
+    max_selected_keywords = 0
+    for label, scraper, keywords in PORTAL_SCRAPERS:
+        if source_labels is not None and label not in source_labels:
+            continue
+        selected_keywords = tuple(_select_keywords(keywords, max_keywords_per_source))
+        if not selected_keywords:
+            continue
+        selected_by_source.append((label, scraper, selected_keywords))
+        max_selected_keywords = max(max_selected_keywords, len(selected_keywords))
+
+    specs: list[tuple[str, object, str]] = []
+    for index in range(max_selected_keywords):
+        for label, scraper, selected_keywords in selected_by_source:
+            if index < len(selected_keywords):
+                specs.append((label, scraper, selected_keywords[index]))
+    return specs
+
+
 async def _upsert_tenders(tenders: list) -> list[int]:
     new_ids: list[int] = []
     async with async_session() as session:
@@ -211,12 +297,15 @@ async def _upsert_tenders(tenders: list) -> list[int]:
 async def _deactivate_missing_source_tenders(
     source: str, active_ref_numbers: set[str]
 ) -> int:
+    now = datetime.now(timezone.utc)
     async with async_session() as session:
         stmt = (
             update(Tender)
             .where(Tender.portal_source == source)
             .where(Tender.is_active.is_(True))
-            .values(is_active=False, fetched_at=datetime.now(timezone.utc))
+            .where(Tender.bid_end_date.is_not(None))
+            .where(Tender.bid_end_date <= now)
+            .values(is_active=False, fetched_at=now)
         )
         if active_ref_numbers:
             stmt = stmt.where(Tender.ref_number.not_in(active_ref_numbers))
@@ -254,11 +343,9 @@ async def run_fetch_cycle(
     and semaphores to prevent slow/hanging scrapers from blocking the whole cycle.
     """
 
-    all_raw: list = []
-
     # Portal fetches are IO-bound. Keep concurrency high enough for Vercel's
     # request window while still avoiding an unbounded thread fan-out.
-    sem_sync = asyncio.Semaphore(24)
+    sem_sync = asyncio.Semaphore(MAX_CONCURRENT_PORTAL_REQUESTS)
     sem_log = asyncio.Semaphore(1)
 
     async def _safe_log_fetch(
@@ -269,20 +356,20 @@ async def run_fetch_cycle(
                 await _log_fetch(source, found, status, error)
         except Exception as exc:
             print(
-                "fetch_log_skipped "
-                f"portal={source!r} status={status!r} reason={exc}"
+                "fetch_log_skipped " f"portal={source!r} status={status!r} reason={exc}"
             )
 
     async def _run_sync_and_log(label: str, func, *args):
+        timeout = SOURCE_TIMEOUT_SECONDS.get(label, DEFAULT_SOURCE_TIMEOUT_SECONDS)
         try:
             async with sem_sync:
                 if args:
                     raw = await asyncio.wait_for(
-                        asyncio.to_thread(func, *args), timeout=30
+                        asyncio.to_thread(func, *args), timeout=timeout
                     )
                 else:
                     raw = await asyncio.wait_for(
-                        asyncio.to_thread(func), timeout=30
+                        asyncio.to_thread(func), timeout=timeout
                     )
             await _safe_log_fetch(label, len(raw), "ok")
             return label, raw, True
@@ -297,19 +384,11 @@ async def run_fetch_cycle(
     source_task_counts: dict[str, int] = defaultdict(int)
     source_success_counts: dict[str, int] = defaultdict(int)
 
-    for label, scraper, keywords in PORTAL_SCRAPERS:
-        if source_labels is not None and label not in source_labels:
-            continue
-        selected_keywords = (
-            keywords[:max_keywords_per_source]
-            if max_keywords_per_source is not None
-            else keywords
-        )
-        for keyword in selected_keywords:
-            source_task_counts[label] += 1
-            tasks.append(
-                asyncio.create_task(_run_sync_and_log(label, scraper, keyword))
-            )
+    for label, scraper, keyword in _build_portal_fetch_specs(
+        source_labels, max_keywords_per_source
+    ):
+        source_task_counts[label] += 1
+        tasks.append(asyncio.create_task(_run_sync_and_log(label, scraper, keyword)))
 
     if include_newspapers:
         # Newspaper/notice scrapers remain active without exposing source filters in the UI.
@@ -373,28 +452,35 @@ async def run_fetch_cycle(
     except Exception:
         pass
 
-    # Await all tasks and collect results
-    results = await asyncio.gather(*tasks)
-    for label, raw, ok in results:
+    # Persist each completed batch as it arrives. Serverless cron/request limits can
+    # interrupt long cycles before every scraper finishes, so waiting until the end
+    # can leave fetch logs without any saved tender rows.
+    new_ids: list[int] = []
+    active_refs_by_source: dict[str, set[str]] = defaultdict(set)
+    for completed in asyncio.as_completed(tasks):
+        label, raw, ok = await completed
         if ok:
             source_success_counts[label] += 1
-        all_raw.extend(raw or [])
-
-    # Deduplicate, normalise and upsert
-    normalised = [normalise_tender(r) for r in all_raw]
-    tenders = deduplicate_tenders([tender for tender in normalised if tender is not None])
-    active_refs_by_source: dict[str, set[str]] = defaultdict(set)
-    for tender in tenders:
-        source = _tender_field(tender, "portal_source")
-        ref_number = _tender_field(tender, "ref_number")
-        if source and ref_number:
-            active_refs_by_source[source].add(ref_number)
-
-    new_ids = await _upsert_tenders(tenders)
+        normalised = [normalise_tender(r) for r in (raw or [])]
+        tenders = deduplicate_tenders(
+            [tender for tender in normalised if tender is not None]
+        )
+        if not tenders:
+            continue
+        for tender in tenders:
+            source = _tender_field(tender, "portal_source")
+            ref_number = _tender_field(tender, "ref_number")
+            if source and ref_number:
+                active_refs_by_source[source].add(ref_number)
+        new_ids.extend(await _upsert_tenders(tenders))
     fully_refreshed_sources = {
         source
         for source, task_count in source_task_counts.items()
         if task_count > 0 and source_success_counts.get(source, 0) == task_count
+        # Several legacy scraper functions report a network/WAF failure as an
+        # empty list.  Until every fetcher has a typed outcome, never interpret
+        # an empty refresh as proof that every stored tender disappeared.
+        and bool(active_refs_by_source.get(source))
     }
     deactivated_count = 0
     for source in fully_refreshed_sources:
@@ -447,7 +533,9 @@ async def send_matching_alerts(new_tender_ids: list[int]) -> int:
             if not keywords:
                 continue
             matches = [
-                tender for tender in tenders if _tender_matches_any_keyword(tender, keywords)
+                tender
+                for tender in tenders
+                if _tender_matches_any_keyword(tender, keywords)
             ]
             if not matches:
                 continue
@@ -503,16 +591,41 @@ async def send_scheduled_subscriber_mails() -> dict[str, object]:
             .limit(3)
         )
         tenders = list(tender_rows)
+
+        recent_tenders_rows = await session.scalars(
+            select(Tender)
+            .where(Tender.is_active.is_(True))
+            .where(Tender.portal_source.in_(ACTIVE_TENDER_SOURCES))
+            .where(Tender.fetched_at >= now - timedelta(hours=24))
+        )
+        recent_tenders = list(recent_tenders_rows)
+
         sent_count = 0
         failed: list[str] = []
+        seen_emails: set[str] = set()
 
         for subscriber in subscribers:
-            last_sent = subscriber.last_sent
-            if last_sent is not None:
-                if last_sent.tzinfo is None:
-                    last_sent = last_sent.replace(tzinfo=timezone.utc)
-                if last_sent > now - timedelta(minutes=30):
-                    continue
+            email_key = subscriber.email.casefold()
+            if email_key in seen_emails:
+                continue
+            seen_emails.add(email_key)
+
+            # Skip scheduled email for instant subscribers as they only get matching alerts
+            if (subscriber.frequency or "daily").casefold() == "instant":
+                continue
+
+            # Skip scheduled categories email if subscriber has keyword matches from last 24 hours
+            keywords = _subscriber_keywords(subscriber)
+            if keywords and any(
+                _tender_matches_any_keyword(tender, keywords)
+                for tender in recent_tenders
+            ):
+                continue
+
+            if not await _claim_scheduled_subscriber_mail(
+                session, subscriber.email, now
+            ):
+                continue
 
             try:
                 sent = send_all_categories_email(subscriber.email, tenders)
@@ -525,19 +638,42 @@ async def send_scheduled_subscriber_mails() -> dict[str, object]:
                 sent = False
 
             if sent:
-                subscriber.last_sent = now
                 sent_count += 1
             else:
                 failed.append(subscriber.email)
-
-        if sent_count:
-            await session.commit()
 
         return {
             "total_subscribers": len(subscribers),
             "sent": sent_count,
             "failed": failed,
         }
+
+
+async def _claim_scheduled_subscriber_mail(session, email: str, now: datetime) -> bool:
+    normalized_email = email.casefold()
+    cutoff = now - SCHEDULED_MAIL_COOLDOWN
+    recent_subscriptions = AlertSubscription.__table__.alias(
+        "recent_alert_subscriptions"
+    )
+    recent_mail_exists = (
+        select(recent_subscriptions.c.id)
+        .where(recent_subscriptions.c.is_active.is_(True))
+        .where(func.lower(recent_subscriptions.c.email) == normalized_email)
+        .where(recent_subscriptions.c.last_sent > cutoff)
+        .exists()
+    )
+    result = await session.execute(
+        update(AlertSubscription)
+        .where(AlertSubscription.is_active.is_(True))
+        .where(func.lower(AlertSubscription.email) == normalized_email)
+        .where(~recent_mail_exists)
+        .values(last_sent=now)
+        .returning(AlertSubscription.id)
+    )
+    claimed = result.first() is not None
+    if claimed:
+        await session.commit()
+    return claimed
 
 
 def _subscriber_keywords(subscriber: AlertSubscription) -> list[str]:
@@ -562,9 +698,6 @@ def _tender_matches_any_keyword(tender: Tender, keywords: list[str]) -> bool:
 
 def _subscriber_is_due(subscriber: AlertSubscription, now: datetime) -> bool:
     frequency = (subscriber.frequency or "daily").casefold()
-    if frequency == "instant":
-        return True
-
     last_alerted = subscriber.last_alerted_at or subscriber.last_sent
     if last_alerted is None:
         return True

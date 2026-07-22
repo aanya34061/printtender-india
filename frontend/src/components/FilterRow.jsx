@@ -1,6 +1,7 @@
 import { SlidersHorizontal, X } from "lucide-react";
 import { useEffect } from "react";
 import { useStats } from "../hooks/useStats.js";
+import { PORTAL_OPTIONS } from "../lib/portals.js";
 import { useFilterStore } from "../store/filterStore.js";
 
 const STATES = [
@@ -26,22 +27,9 @@ const VALUE_OPTS = [
   { label: "Above ₹1 Crore", min: 10_000_000, max: null },
 ];
 
-const DEFAULT_PORTAL_OPTIONS = [
-  "MP Tenders",
-  "eproc.mp.gov.in",
-  "CPPP",
-  "etenders.gov.in",
-  "gem.gov.in",
-  "PNB Tenders",
-  "Canara Bank Tenders",
-  "Central Bank of India Tenders",
-  "Bank of India Tenders",
-  "Indian Bank Tenders",
-  "UCO Bank Tenders",
-  "Indian Overseas Bank Tenders",
-  "LIC Tenders",
-  "Maharashtra Tenders",
-];
+function displayPortal(name) {
+  return name === "etenders.gov.in" ? "CPPP" : name;
+}
 
 export default function FilterRow() {
   const {
@@ -52,8 +40,8 @@ export default function FilterRow() {
 
   const portalKeys = Object.entries(stats?.by_portal ?? {})
     .filter(([, count]) => Number(count) > 0)
-    .map(([name]) => name);
-  const portalOptions = Array.from(new Set([...DEFAULT_PORTAL_OPTIONS, ...portalKeys]));
+    .map(([name]) => displayPortal(name));
+  const portalOptions = Array.from(new Set([...PORTAL_OPTIONS, ...portalKeys]));
 
   useEffect(() => {
     if (portal && portalOptions.length > 0 && !portalOptions.includes(portal)) {

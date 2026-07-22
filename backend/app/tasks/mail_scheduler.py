@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 from app.tasks.fetch_job import send_scheduled_subscriber_mails
 
 IST = ZoneInfo("Asia/Kolkata")
-SCHEDULED_MAIL_TIMES = ((9, 0), (13, 30), (19, 0))
+SCHEDULED_MAIL_TIMES = ((8, 0),)
 
 
 def next_scheduled_mail_at(now: datetime | None = None) -> datetime:

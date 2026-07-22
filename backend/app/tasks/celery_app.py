@@ -35,18 +35,10 @@ if settings.REDIS_URL and Celery is not None and crontab is not None:
                 "task": "app.tasks.fetch_job.fetch_all_tenders",
                 "schedule": settings.FETCH_INTERVAL_HOURS * 3600,
             },
-            "send-morning-subscriber-mails": {
+            "send-daily-subscriber-mails": {
                 "task": "app.tasks.fetch_job.send_scheduled_subscriber_mails_task",
-                "schedule": crontab(hour=9, minute=0),
+                "schedule": crontab(hour=8, minute=0),
             },
-            "send-afternoon-subscriber-mails": {
-                "task": "app.tasks.fetch_job.send_scheduled_subscriber_mails_task",
-                "schedule": crontab(hour=13, minute=30),
-            },
-            "send-evening-subscriber-mails": {
-                "task": "app.tasks.fetch_job.send_scheduled_subscriber_mails_task",
-                "schedule": crontab(hour=19, minute=0),
-            }
         },
     )
 else:

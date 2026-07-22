@@ -4,7 +4,7 @@ import { useFilterStore } from "../store/filterStore.js";
 import { useShallow } from "zustand/react/shallow";
 
 export function portalColor(name) {
-  if (name === "CPPP" || name === "etenders.gov.in") return "#3b82f6";
+  if (name === "CPPP") return "#3b82f6";
   if (name === "GeM" || name === "gem.gov.in") return "#22c55e";
   if ([
     "PNB Tenders",
@@ -55,11 +55,9 @@ export default function PortalDistribution({ compact = false }) {
   const { setPortal, setQ } = useFilterStore(
     useShallow((s) => ({ setPortal: s.setPortal, setQ: s.setQ })),
   );
-  const portalData = stats?.by_portal
-    ? Object.entries(stats.by_portal)
-        .filter(([, value]) => Number(value) > 0)
-        .map(([name, value]) => ({ name, value: Number(value) }))
-    : [];
+  const portalData = Object.entries(stats?.by_portal ?? {})
+    .filter(([, value]) => Number(value) > 0)
+    .map(([name, value]) => ({ name, value: Number(value) }));
 
   if (isLoading) {
     return <div className="skeleton h-64 rounded-xl" />;
@@ -78,7 +76,7 @@ export default function PortalDistribution({ compact = false }) {
         <h3 className="text-sm font-semibold text-slate-300">Tenders by Portal</h3>
         {!compact && (
           <span className="text-xs font-semibold" style={{ color: "var(--muted)" }}>
-            {stats?.portals_count ?? portalData.length} portals
+            {portalData.length} portals
           </span>
         )}
       </div>

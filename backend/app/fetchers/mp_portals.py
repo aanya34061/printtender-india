@@ -5,7 +5,7 @@ import hashlib
 import random
 import re
 import time
-from urllib.parse import quote_plus, urljoin
+from urllib.parse import quote_plus, urljoin, urlparse
 
 import httpx
 from bs4 import BeautifulSoup, Tag
@@ -42,57 +42,61 @@ def _dedupe_keywords(keywords: list[str]) -> list[str]:
     return deduped
 
 
-MP_TENDERS_KEYWORDS: list[str] = _dedupe_keywords([
-    *IMAGE_PRODUCT_KEYWORDS,
-    "calendar",
-    "book",
-    "form",
-    "brochure",
-    "certificate",
-    "answer book",
-    "poster",
-    "banner",
-    "label",
-    "envelope",
-    "pamphlet",
-    "annual report",
-])
+MP_TENDERS_KEYWORDS: list[str] = _dedupe_keywords(
+    [
+        *IMAGE_PRODUCT_KEYWORDS,
+        "calendar",
+        "book",
+        "form",
+        "brochure",
+        "certificate",
+        "answer book",
+        "poster",
+        "banner",
+        "label",
+        "envelope",
+        "pamphlet",
+        "annual report",
+    ]
+)
 
-MP_PRINT_KEYWORDS: list[str] = _dedupe_keywords([
-    *MP_TENDERS_KEYWORDS,
-    "printing",
-    "offset printing",
-    "digital printing",
-    "stationery",
-    "security printing",
-    "textbook",
-    "textbook printing",
-    "gazette",
-    "calendar",
-    "diary",
-    "sticker",
-    "registers",
-    "letterpress",
-    "book binding",
-    "packaging",
-    "मुद्रण",
-    "छपाई",
-    "स्टेशनरी",
-    "पुस्तक",
-    "रजिस्टर",
-    "प्रपत्र",
-    "ब्रोशर",
-    "पोस्टर",
-    "बैनर",
-    "प्रमाण पत्र",
-    "डायरी",
-    "कैलेंडर",
-    "लेबल",
-    "लिफाफा",
-    "नोटबुक",
-    "उत्तर पुस्तिका",
-    "वार्षिक प्रतिवेदन",
-])
+MP_PRINT_KEYWORDS: list[str] = _dedupe_keywords(
+    [
+        *MP_TENDERS_KEYWORDS,
+        "printing",
+        "offset printing",
+        "digital printing",
+        "stationery",
+        "security printing",
+        "textbook",
+        "textbook printing",
+        "gazette",
+        "calendar",
+        "diary",
+        "sticker",
+        "registers",
+        "letterpress",
+        "book binding",
+        "packaging",
+        "मुद्रण",
+        "छपाई",
+        "स्टेशनरी",
+        "पुस्तक",
+        "रजिस्टर",
+        "प्रपत्र",
+        "ब्रोशर",
+        "पोस्टर",
+        "बैनर",
+        "प्रमाण पत्र",
+        "डायरी",
+        "कैलेंडर",
+        "लेबल",
+        "लिफाफा",
+        "नोटबुक",
+        "उत्तर पुस्तिका",
+        "वार्षिक प्रतिवेदन",
+    ]
+)
 
 MP_STATE_TERMS = (
     "madhya pradesh",
@@ -123,10 +127,12 @@ def _wait_between_requests() -> None:
     time.sleep(random.uniform(2, 4))
 
 
-def _fetch_html(url: str, *, params: dict[str, str] | None = None) -> str:
+def _fetch_html(
+    url: str, *, params: dict[str, str] | None = None, timeout: float = 30
+) -> str:
     _wait_between_requests()
     with httpx.Client(
-        timeout=30, follow_redirects=True, headers=REQUEST_HEADERS
+        timeout=timeout, follow_redirects=True, headers=REQUEST_HEADERS
     ) as client:
         response = client.get(url, params=params)
         response.raise_for_status()
@@ -246,7 +252,9 @@ def _record_from_nic_row(
         # The legacy MP portal page includes navigation chrome and table headers in
         # generic tables. Real result rows carry a direct tender link or an
         # extractable tender id/ref block; anything else should be ignored.
-        if not direct_url and not _looks_like_mp_tender_result_row(row.get_text(" ", strip=True)):
+        if not direct_url and not _looks_like_mp_tender_result_row(
+            row.get_text(" ", strip=True)
+        ):
             return None
 
     direct_url, tender_id = _first_direct_nic_link(row, base_url)
@@ -264,7 +272,21 @@ def _record_from_nic_row(
     if not ref_number or not title:
         return None
 
-    portal_url = direct_url or build_deep_link(portal_source, ref_number, tender_id)
+    if direct_url and is_brittle_nic_direct_link(direct_url):
+        bracket_title, bracket_ref, stable_tender_id = _split_mptenders_title_ref(
+            row_text
+        )
+        if bracket_title and bracket_ref:
+            title = bracket_title
+            ref_number = bracket_ref
+        tender_id = stable_tender_id or tender_id
+        portal_url = build_deep_link(portal_source, ref_number, tender_id)
+        link_verified = False
+    else:
+        portal_url = direct_url or build_deep_link(
+            portal_source, ref_number, tender_id
+        )
+        link_verified = bool(direct_url)
     return _builder.build_record(
         ref_number=ref_number,
         title=title,
@@ -276,7 +298,7 @@ def _record_from_nic_row(
         portal_url=portal_url,
         keyword_hit=keyword,
         tender_id=tender_id,
-        link_verified=bool(direct_url),
+        link_verified=link_verified,
     )
 
 
@@ -315,7 +337,9 @@ def _record_from_mptenders_result_row(
         portal_url = build_deep_link(portal_source, ref_number, resolved_tender_id)
         link_verified = bool(resolved_tender_id)
     else:
-        portal_url = direct_url or build_deep_link(portal_source, ref_number, resolved_tender_id)
+        portal_url = direct_url or build_deep_link(
+            portal_source, ref_number, resolved_tender_id
+        )
         link_verified = bool(direct_url)
     return _builder.build_record(
         ref_number=ref_number,
@@ -433,11 +457,19 @@ def scrape_mp_eproc(keyword: str) -> list[dict]:
 
 
 def scrape_mp_pwd(keyword: str) -> list[dict]:
-    return _scrape_nic_keyword_portal(
+    tenders = _scrape_nic_keyword_portal(
         keyword=keyword,
-        base_url="https://mpeprocurement.gov.in/nicgep/app",
+        base_url=MPTENDERS_URL,
         portal_source="MP PWD",
     )
+    return [
+        tender
+        for tender in tenders
+        if any(
+            marker in str(tender.get("organisation") or "").casefold()
+            for marker in ("pwd", "public works", "pwdrb")
+        )
+    ]
 
 
 async def scrape_gem_mp_async(keyword: str) -> list[dict]:
@@ -544,6 +576,7 @@ def scrape_mpbse(keyword: str) -> list[dict]:
         keyword=keyword,
         portal_source="MPBSE",
         listing_urls=[
+            "https://mpbse.nic.in/tenders%20and%20advertisement.html",
             "https://mpbse.nic.in/tender.html",
             "https://mpbse.nic.in/tenders.html",
             "https://mpbse.nic.in/Tender.htm",
@@ -557,6 +590,9 @@ def scrape_mp_forest(keyword: str) -> list[dict]:
         keyword=keyword,
         portal_source="MP Forest",
         listing_urls=[
+            "https://mpforest.gov.in/publicdomain/tender/dashboard.aspx",
+            "https://mpforest.gov.in/HO_Outer/Tender_Dates.aspx",
+            "https://mpforest.gov.in/",
             "https://mpforest.gov.in/tenders",
             "https://mpforest.gov.in/Tenders",
             "https://mpforest.gov.in/tender",
@@ -569,6 +605,7 @@ def scrape_mp_info(keyword: str) -> list[dict]:
         keyword=keyword,
         portal_source="MP Info",
         listing_urls=[
+            "https://mpinfo.org/",
             "https://mpinfo.org/Home/Tender",
             "https://mpinfo.org/Home/Tenders",
             "https://mpinfo.org/Tender",
@@ -597,12 +634,13 @@ def _scrape_document_listing(
     portal_source: str,
     listing_urls: list[str],
     require_document: bool = True,
+    request_timeout: float = 12,
 ) -> list[dict]:
     html = ""
     source_url = listing_urls[0]
     for listing_url in listing_urls:
         try:
-            html = _fetch_html(listing_url)
+            html = _fetch_html(listing_url, timeout=request_timeout)
             source_url = listing_url
             break
         except Exception:
@@ -625,6 +663,11 @@ def _scrape_document_listing(
             DOC_RE.search(portal_url) or TENDER_TEXT_RE.search(context)
         ):
             continue
+        if not require_document:
+            if not TENDER_TEXT_RE.search(context):
+                continue
+            if urlparse(portal_url).netloc != urlparse(source_url).netloc:
+                continue
         if not _contains_print_keyword(context, keyword):
             continue
 

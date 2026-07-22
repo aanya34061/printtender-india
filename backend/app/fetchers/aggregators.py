@@ -15,6 +15,7 @@ from app.fetchers.base import BaseFetcher, REQUEST_HEADERS
 from app.fetchers.deeplinks import (
     build_deep_link,
     extract_nic_tender_id,
+    infer_official_link_from_aggregator,
     is_generic_link,
 )
 
@@ -61,7 +62,6 @@ BRACKETED_TENDER_RE = re.compile(
 )
 
 
-
 def scrape_tenderdekho(keyword: str) -> list[dict]:
     urls = [
         ("https://tenderdekho.com/tenders", {"search": keyword}),
@@ -87,6 +87,7 @@ def scrape_bidassist(keyword: str) -> list[dict]:
         portal_source="BidAssist",
         urls=urls,
         link_predicate=_is_bidassist_detail_link,
+        request_timeout=8,
     )
 
 
@@ -149,12 +150,13 @@ def _scrape_aggregator(
     urls: list[tuple[str, dict[str, str] | None]],
     link_predicate: "callable",
     log: bool = True,
+    request_timeout: float = 12,
 ) -> list[dict]:
     tenders: list[dict] = []
     last_error: str | None = None
     for url, params in urls:
         try:
-            html = _fetch_html(url, params=params)
+            html = _fetch_html(url, params=params, timeout=request_timeout)
         except Exception as exc:
             last_error = str(exc)
             continue
@@ -185,9 +187,6 @@ def _scrape_aggregator(
     return tenders
 
 
-
-
-
 def _run_async(coro):
     try:
         asyncio.get_running_loop()
@@ -210,14 +209,18 @@ def _run_async(coro):
     return result.get("value", [])
 
 
-def _fetch_html(url: str, *, params: dict[str, str] | None = None) -> str:
+def _fetch_html(
+    url: str, *, params: dict[str, str] | None = None, timeout: float = 12
+) -> str:
     _builder.wait_between_requests()
     headers = {
         **REQUEST_HEADERS,
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "en-IN,en;q=0.9",
     }
-    with httpx.Client(timeout=30, follow_redirects=True, headers=headers) as client:
+    with httpx.Client(
+        timeout=timeout, follow_redirects=True, headers=headers
+    ) as client:
         response = client.get(url, params=params)
         response.raise_for_status()
         return response.text
@@ -281,22 +284,34 @@ def _records_from_detail_links(
         ):
             continue
         tender_id = _slug_from_url(portal_url)
-        ref_number = _extract_ref(effective_context) or tender_id or _stable_ref(
-            portal_source, portal_url
+        ref_number = (
+            _extract_ref(effective_context)
+            or tender_id
+            or _stable_ref(portal_source, portal_url)
+        )
+        organisation = _extract_organisation(effective_context, title)
+        state = _extract_state(effective_context)
+        official_url = infer_official_link_from_aggregator(
+            portal_source,
+            ref_number,
+            tender_id,
+            title=title,
+            organisation=organisation,
+            state=state,
         )
         tenders.append(
             _builder.build_record(
                 ref_number=ref_number,
                 title=title,
-                organisation=_extract_organisation(effective_context, title),
-                state=_extract_state(effective_context),
+                organisation=organisation,
+                state=state,
                 portal_source=portal_source,
                 deadline_raw=_extract_deadline(effective_context),
                 value_raw=_extract_value(effective_context),
-                portal_url=portal_url,
+                portal_url=official_url or portal_url,
                 keyword_hit=keyword,
                 tender_id=tender_id,
-                link_verified=True,
+                link_verified=official_url is None,
             )
         )
     return tenders
@@ -393,7 +408,7 @@ def _title_from_context(text: str) -> str:
 
 def _extract_ref(text: str) -> str | None:
     patterns = (
-        r"\bGEM/\d{4}/B/\d+\b",
+        r"\bGEM/\d{4}/[A-Z]+/\d+\b",
         r"\b(?:Tender\s*(?:ID|No\.?|Number)?|Ref(?:erence)?(?:\s*No\.?)?|TID)\s*[:#-]?\s*([A-Z0-9][A-Z0-9/_-]{3,})",
         r"\b[A-Z]{2,}[-/][A-Z0-9][A-Z0-9/-]{4,}\b",
     )
@@ -405,7 +420,9 @@ def _extract_ref(text: str) -> str | None:
 
 
 def _extract_organisation(text: str, title: str) -> str | None:
-    labelled = _extract_label(text, ("Organisation", "Organization", "Authority", "Purchaser Name"))
+    labelled = _extract_label(
+        text, ("Organisation", "Organization", "Authority", "Purchaser Name")
+    )
     if labelled:
         return labelled
     match = re.match(r"(.+?)\s+Tender(?:\s+-|\b)", title, flags=re.IGNORECASE)

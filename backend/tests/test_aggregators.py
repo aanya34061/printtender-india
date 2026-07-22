@@ -70,6 +70,32 @@ def test_scrape_tenderdekho_extracts_slug_link() -> None:
 
 
 @respx.mock
+def test_scrape_tenderdekho_gem_marker_uses_official_gem_search() -> None:
+    html = """
+    <article>
+      <a href="/tender-detail/td-gem-stationery">
+        LIC Life Insurance Corporation Printing Forms Tender Bareilly Uttar Pradesh 2026 GEM Service
+      </a>
+      <span>Organization: LIC Life Insurance Corporation</span>
+      <span>Bareilly, Uttar Pradesh</span>
+      <span>Bid End Date 30 Jun 2026</span>
+    </article>
+    """
+    respx.get(url__regex=r"https://tenderdekho\.com/tenders.*").mock(
+        return_value=httpx.Response(200, text=html)
+    )
+
+    tenders = scrape_tenderdekho("printing")
+
+    assert len(tenders) == 1
+    assert tenders[0]["portal_source"] == "TenderDekho"
+    assert tenders[0]["portal_url"].startswith(
+        "https://bidplus.gem.gov.in/all-bids?search_bid="
+    )
+    assert tenders[0]["link_type"] == "search"
+
+
+@respx.mock
 def test_scrape_tenderdekho_ignores_irrelevant_search_match() -> None:
     html = """
     <article>

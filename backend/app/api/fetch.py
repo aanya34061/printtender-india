@@ -4,6 +4,7 @@ from fastapi import APIRouter, Header, HTTPException
 
 from app.config import get_settings
 from app.sources import LIVE_PORTAL_SOURCES
+from app.tasks.fetch_job import FAST_FETCH_KEYWORD_LIMIT
 
 router = APIRouter()
 
@@ -50,6 +51,7 @@ async def _run_and_store(*, scope: str = "live") -> int:
     elif normalized_scope in {"cron", "live"}:
         count = await run_fetch_cycle(
             source_labels=LIVE_CRON_PORTAL_SOURCES,
+            max_keywords_per_source=FAST_FETCH_KEYWORD_LIMIT,
             include_newspapers=False,
         )
     else:
@@ -59,8 +61,10 @@ async def _run_and_store(*, scope: str = "live") -> int:
         )
     _last_count["count"] = count
     from app.api.stats import clear_stats_cache
+    from app.api.tenders import clear_tender_list_cache
 
     clear_stats_cache()
+    clear_tender_list_cache()
     return count
 
 

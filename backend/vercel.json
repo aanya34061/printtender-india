@@ -9,15 +9,7 @@
     },
     {
       "path": "/api/fetch/mail-cron",
-      "schedule": "30 3 * * *"
-    },
-    {
-      "path": "/api/fetch/mail-cron",
-      "schedule": "0 8 * * *"
-    },
-    {
-      "path": "/api/fetch/mail-cron",
-      "schedule": "30 13 * * *"
+      "schedule": "30 2 * * *"
     }
   ]
 }

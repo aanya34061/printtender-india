@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { fetchJSON } from "../lib/api.js";
 
-export const TENDER_LIST_STALE_MS = 1000 * 60 * 5;
+export const TENDER_LIST_STALE_MS = 1000 * 30;
 
 export function fetchTenders(filters) {
   return fetchJSON("/api/tenders", {

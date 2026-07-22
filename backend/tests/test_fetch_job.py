@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from app.sources import PORTAL_SOURCES
+from app.sources import LIVE_PORTAL_SOURCES, PORTAL_SOURCES
 from app.tasks import fetch_job
 from app.tasks.mail_scheduler import IST, next_scheduled_mail_at
 
@@ -15,10 +15,35 @@ def test_portal_scrapers_cover_active_portal_sources() -> None:
     )
 
 
+def test_live_portal_sources_cover_all_portal_sources() -> None:
+    assert set(LIVE_PORTAL_SOURCES) == set(PORTAL_SOURCES)
+
+
+def test_limited_keyword_selection_prioritizes_high_signal_terms() -> None:
+    selected = fetch_job._select_keywords(
+        ["calendars", "diary", "printing", "stationery", "forms"],
+        3,
+    )
+
+    assert selected == ["printing", "stationery", "forms"]
+
+
+def test_portal_fetch_specs_start_with_one_keyword_per_source() -> None:
+    specs = fetch_job._build_portal_fetch_specs(set(LIVE_PORTAL_SOURCES), 2)
+    expected_first_round = [
+        label for label, _scraper, _keywords in fetch_job.PORTAL_SCRAPERS
+    ]
+    first_round = [
+        label for label, _scraper, _keyword in specs[: len(expected_first_round)]
+    ]
+
+    assert first_round == expected_first_round
+    assert len(specs) == len(fetch_job.PORTAL_SCRAPERS) * 2
+
+
 def test_mp_tenders_uses_mp_specific_keywords() -> None:
     keywords_by_source = {
-        label: keywords
-        for label, _scraper, keywords in fetch_job.PORTAL_SCRAPERS
+        label: keywords for label, _scraper, keywords in fetch_job.PORTAL_SCRAPERS
     }
 
     assert keywords_by_source["MP Tenders"] is fetch_job.MP_TENDERS_KEYWORDS
@@ -27,8 +52,7 @@ def test_mp_tenders_uses_mp_specific_keywords() -> None:
 
 def test_bank_portals_use_focused_bank_keywords() -> None:
     keywords_by_source = {
-        label: keywords
-        for label, _scraper, keywords in fetch_job.PORTAL_SCRAPERS
+        label: keywords for label, _scraper, keywords in fetch_job.PORTAL_SCRAPERS
     }
 
     for label in (
@@ -67,6 +91,9 @@ def test_alert_frequency_due_windows() -> None:
     subscriber.frequency = "instant"
     subscriber.last_alerted_at = now
     subscriber.last_sent = now
+    assert fetch_job._subscriber_is_due(subscriber, now) is False
+    subscriber.last_alerted_at = None
+    subscriber.last_sent = None
     assert fetch_job._subscriber_is_due(subscriber, now) is True
 
     subscriber.frequency = "daily"
@@ -83,18 +110,12 @@ def test_alert_frequency_due_windows() -> None:
 
 
 def test_next_scheduled_mail_at_uses_requested_ist_times() -> None:
-    assert next_scheduled_mail_at(
-        datetime(2026, 6, 2, 8, 59, tzinfo=IST)
-    ) == datetime(2026, 6, 2, 9, 0, tzinfo=IST)
-    assert next_scheduled_mail_at(
-        datetime(2026, 6, 2, 9, 1, tzinfo=IST)
-    ) == datetime(2026, 6, 2, 13, 30, tzinfo=IST)
-    assert next_scheduled_mail_at(
-        datetime(2026, 6, 2, 13, 31, tzinfo=IST)
-    ) == datetime(2026, 6, 2, 19, 0, tzinfo=IST)
-    assert next_scheduled_mail_at(
-        datetime(2026, 6, 2, 19, 1, tzinfo=IST)
-    ) == datetime(2026, 6, 3, 9, 0, tzinfo=IST)
+    assert next_scheduled_mail_at(datetime(2026, 6, 2, 7, 59, tzinfo=IST)) == datetime(
+        2026, 6, 2, 8, 0, tzinfo=IST
+    )
+    assert next_scheduled_mail_at(datetime(2026, 6, 2, 8, 1, tzinfo=IST)) == datetime(
+        2026, 6, 3, 8, 0, tzinfo=IST
+    )
 
 
 @pytest.mark.asyncio
@@ -245,7 +266,7 @@ async def test_run_fetch_cycle_deactivates_lic_rows_missing_from_active_page(
 
 
 @pytest.mark.asyncio
-async def test_run_fetch_cycle_deactivates_all_rows_after_clean_empty_refresh(
+async def test_run_fetch_cycle_preserves_rows_after_ambiguous_empty_refresh(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     deactivated: list[tuple[str, set[str]]] = []
@@ -288,7 +309,7 @@ async def test_run_fetch_cycle_deactivates_all_rows_after_clean_empty_refresh(
 
     await fetch_job.run_fetch_cycle(include_newspapers=False)
 
-    assert deactivated == [("CPPP", set())]
+    assert deactivated == []
 
 
 @pytest.mark.asyncio
@@ -381,15 +402,67 @@ async def test_scheduled_subscriber_mails_sends_to_active_subscribers(
         sent.append((to_email, tenders))
         return True
 
+    async def fake_claim(_session, _email: str, _now: datetime) -> bool:
+        return True
+
     monkeypatch.setattr(fetch_job, "async_session", FakeSession)
     monkeypatch.setattr(fetch_job, "send_all_categories_email", fake_send)
+    monkeypatch.setattr(fetch_job, "_claim_scheduled_subscriber_mail", fake_claim)
 
     result = await fetch_job.send_scheduled_subscriber_mails()
 
     assert result == {"total_subscribers": 1, "sent": 1, "failed": []}
     assert sent == [("press@example.com", [tender])]
-    assert subscriber.last_sent is not None
-    assert commits == 1
+    assert commits == 0
+
+
+@pytest.mark.asyncio
+async def test_scheduled_subscriber_mails_sends_once_per_email(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first_subscriber = MagicMock()
+    first_subscriber.id = 1
+    first_subscriber.email = "press@example.com"
+    second_subscriber = MagicMock()
+    second_subscriber.id = 2
+    second_subscriber.email = "press@example.com"
+    tender = MagicMock()
+    sent: list[str] = []
+    claimed: list[str] = []
+
+    class FakeSession:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def scalars(self, _query):
+            self.calls += 1
+            if self.calls == 1:
+                return [first_subscriber, second_subscriber]
+            return [tender]
+
+    def fake_send(to_email: str, _tenders: list[MagicMock]) -> bool:
+        sent.append(to_email)
+        return True
+
+    async def fake_claim(_session, email: str, _now: datetime) -> bool:
+        claimed.append(email)
+        return True
+
+    monkeypatch.setattr(fetch_job, "async_session", FakeSession)
+    monkeypatch.setattr(fetch_job, "send_all_categories_email", fake_send)
+    monkeypatch.setattr(fetch_job, "_claim_scheduled_subscriber_mail", fake_claim)
+
+    result = await fetch_job.send_scheduled_subscriber_mails()
+
+    assert result == {"total_subscribers": 2, "sent": 1, "failed": []}
+    assert claimed == ["press@example.com"]
+    assert sent == ["press@example.com"]
 
 
 @pytest.mark.asyncio
@@ -426,8 +499,12 @@ async def test_scheduled_subscriber_mails_skips_recently_sent_subscriber(
         sent.append(to_email)
         return True
 
+    async def fake_claim(_session, _email: str, _now: datetime) -> bool:
+        return False
+
     monkeypatch.setattr(fetch_job, "async_session", FakeSession)
     monkeypatch.setattr(fetch_job, "send_all_categories_email", fake_send)
+    monkeypatch.setattr(fetch_job, "_claim_scheduled_subscriber_mail", fake_claim)
 
     result = await fetch_job.send_scheduled_subscriber_mails()
 

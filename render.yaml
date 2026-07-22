@@ -33,25 +33,14 @@ services:
     envVars:
       - fromGroup: printtender-env
 
-  # --- Scheduled subscriber mails: 09:00 and 19:00 IST (03:30 and 13:30 UTC) ---
+  # --- Scheduled subscriber mails: 08:00 IST (02:30 UTC) ---
   - type: cron
     name: printtender-mail-scheduler-main
     runtime: python
     rootDir: backend
     buildCommand: pip install -r requirements.txt && playwright install chromium --with-deps
     startCommand: python -c "import asyncio; from app.tasks.fetch_job import send_scheduled_subscriber_mails; print(asyncio.run(send_scheduled_subscriber_mails()))"
-    schedule: "30 3,13 * * *"
-    envVars:
-      - fromGroup: printtender-env
-
-  # --- Scheduled subscriber mails: 13:30 IST (08:00 UTC) ---
-  - type: cron
-    name: printtender-mail-scheduler-afternoon
-    runtime: python
-    rootDir: backend
-    buildCommand: pip install -r requirements.txt && playwright install chromium --with-deps
-    startCommand: python -c "import asyncio; from app.tasks.fetch_job import send_scheduled_subscriber_mails; print(asyncio.run(send_scheduled_subscriber_mails()))"
-    schedule: "0 8 * * *"
+    schedule: "30 2 * * *"
     envVars:
       - fromGroup: printtender-env
 
@@ -79,7 +68,7 @@ envVarGroups:
       - key: APP_ENV
         value: production
       - key: ENABLE_SCHEDULED_MAILS
-        value: "true"
+        value: "false"
       - key: FETCH_INTERVAL_HOURS
         value: "6"
       - key: MAX_TENDERS_PER_KEYWORD

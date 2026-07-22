@@ -7,8 +7,6 @@ from bs4 import BeautifulSoup
 
 from app.fetchers.base import BaseFetcher, REQUEST_HEADERS
 from app.fetchers.deeplinks import (
-    NIC_PORTAL_BASES,
-    _nic_direct_link,
     build_deep_link,
     extract_nic_tender_id,
     is_brittle_nic_direct_link,
@@ -164,14 +162,9 @@ class StateFetcher(BaseFetcher):
                 raw_portal_url = urljoin(base_url, href) if not href.startswith("http") else href
                 if is_brittle_nic_direct_link(raw_portal_url):
                     tender_id = parsed_tender_id
-                    if state_code == "MH" and tender_id:
-                        portal_url = _nic_direct_link(
-                            NIC_PORTAL_BASES[portal_source], tender_id
-                        )
-                    else:
-                        portal_url = build_deep_link(
-                            portal_source, ref_number, tender_id
-                        )
+                    portal_url = build_deep_link(
+                        portal_source, ref_number, tender_id
+                    )
                     link_verified = bool(tender_id)
                 else:
                     portal_url = raw_portal_url
@@ -185,14 +178,9 @@ class StateFetcher(BaseFetcher):
                     raw_portal_url = urljoin(base_url, href) if not href.startswith("http") else href
                     if is_brittle_nic_direct_link(raw_portal_url):
                         tender_id = parsed_tender_id
-                        if state_code == "MH" and tender_id:
-                            portal_url = _nic_direct_link(
-                                NIC_PORTAL_BASES[portal_source], tender_id
-                            )
-                        else:
-                            portal_url = build_deep_link(
-                                portal_source, ref_number, tender_id
-                            )
+                        portal_url = build_deep_link(
+                            portal_source, ref_number, tender_id
+                        )
                         link_verified = bool(tender_id)
                     else:
                         portal_url = raw_portal_url

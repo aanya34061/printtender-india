@@ -48,140 +48,157 @@ def send_tender_alert_email(
     *,
     unsubscribe_url: str | None = None,
 ) -> bool:
-    visible = tenders[:10]
-    extra_count = max(0, len(tenders) - len(visible))
-    cards = "".join(_tender_card(tender) for tender in visible)
+    visible = tenders[:15]
+    table_html = _tenders_table(visible)
     dashboard_url = get_settings().FRONTEND_URL
-    extra = (
-        f"""
-        <p style="margin:18px 0 0;color:{MUTED};font-size:14px">
-          {extra_count} more matching tenders are available on the dashboard.
-        </p>
-        {_button("Open Dashboard", dashboard_url)}
-        """
-        if extra_count
-        else ""
-    )
     unsub = (
-        f'<p style="margin:20px 0 0;color:{MUTED};font-size:12px">'
+        f'<p style="margin:20px 0 0;text-align:center;color:{MUTED};font-size:12px">'
         f'<a href="{escape(unsubscribe_url)}" style="color:{MUTED}">Unsubscribe</a></p>'
         if unsubscribe_url
         else ""
     )
     html = _shell(
-        title=f"New tenders for {escape(keyword)}",
+        title="Daily PrintTender India Alert",
         body=f"""
-        <p style="margin:0 0 18px;color:{MUTED};font-size:15px;line-height:1.6">
-          We found {len(tenders)} tender{"" if len(tenders) == 1 else "s"} matching
-          <strong style="color:{TEXT}">{escape(keyword)}</strong>.
+        <p style="margin:0 0 16px;color:{MUTED};font-size:15px;line-height:1.6">
+          Here is your daily tender update matching
+          <strong style="color:{TEXT}">{escape(keyword)}</strong> ({len(tenders)} active tender{"" if len(tenders) == 1 else "s"}).
         </p>
-        {cards}
-        {extra}
+        {table_html}
+        {_open_site_button(dashboard_url)}
         {unsub}
         """,
     )
     return _send(
         to_email,
-        f"PrintTender India: {len(tenders)} new tender matches",
+        f"PrintTender India: Daily {escape(keyword)} Tenders ({len(tenders)})",
         html,
-        f"{len(tenders)} tenders matched {keyword}. Open {dashboard_url}",
+        f"{len(tenders)} active tenders for {keyword}. Open {dashboard_url}",
     )
 
 
 def send_test_tender_email(to_email: str, keywords: list[str]) -> bool:
     keyword_label = ", ".join(keywords) if keywords else "printing"
     sample_tender = {
-        "title": "Sample tender mail - Printing and stationery supply",
+        "title": "Sample Tender - Printing & Stationery Supply",
         "organisation": "PrintTender India",
         "state": "India",
         "bid_end_date": datetime.now(timezone.utc),
         "portal_url": get_settings().FRONTEND_URL,
-        "portal_source": "PrintTender India",
+        "portal_source": "PrintTender",
         "ref_number": "TEST-MAIL",
         "tender_id": None,
+        "value_inr": 250000.0,
     }
+    dashboard_url = get_settings().FRONTEND_URL
     html = _shell(
-        title="Test tender mail",
+        title="PrintTender India Test Mail",
         body=f"""
-        <p style="margin:0 0 18px;color:{MUTED};font-size:15px;line-height:1.6">
-          This is a test tender mail for
+        <p style="margin:0 0 16px;color:{MUTED};font-size:15px;line-height:1.6">
+          This is a sample of your daily tender digest email for
           <strong style="color:{TEXT}">{escape(keyword_label)}</strong>.
-          Future matching tender mails will use this format after the subscription is confirmed.
         </p>
-        {_tender_card(sample_tender)}
-        {_button("Open Dashboard", get_settings().FRONTEND_URL)}
+        {_tenders_table([sample_tender])}
+        {_open_site_button(dashboard_url)}
         """,
     )
     return _send(
         to_email,
-        "PrintTender India test tender mail",
+        "PrintTender India Test Mail",
         html,
-        f"Test tender mail for {keyword_label}. Open {get_settings().FRONTEND_URL}",
+        f"Test tender mail for {keyword_label}. Open {dashboard_url}",
     )
 
 
 def send_all_categories_email(to_email: str, tenders: list[Any] | None = None) -> bool:
-    categories = [
-        ("Books & notebooks", "note books, exercise books, answer books, registers, pass books"),
-        ("Forms & documents", "forms, papers, note sheets, certificates, annual reports"),
-        ("Marketing print", "brochures, flyers, posters, banners, visiting cards, pamphlets"),
-        ("Packaging & labels", "labels, tags, stickers, envelopes, duplex boxes, files"),
-        ("Specialty items", "diaries, calendars, cards, mark sheets, stationery"),
-    ]
-    category_rows = "".join(
-        f"""
-        <tr>
-          <td style="padding:12px 0;border-bottom:1px solid rgba(255,255,255,.08);color:{TEXT};font-weight:800">
-            {escape(title)}
-          </td>
-          <td style="padding:12px 0;border-bottom:1px solid rgba(255,255,255,.08);color:{MUTED};font-size:13px;line-height:1.5">
-            {escape(items)}
-          </td>
-        </tr>
-        """
-        for title, items in categories
-    )
-    tender_rows = "".join(_compact_tender_row(tender) for tender in (tenders or [])[:3])
-    tender_section = (
-        f"""
-        <h2 style="margin:22px 0 12px;font-size:18px;line-height:1.3;color:{TEXT}">
-          3 newly added tender overview
-        </h2>
-        {tender_rows}
-        <p style="margin:14px 0 0;color:{MUTED};font-size:14px;line-height:1.6">
-          Visit the PrintTender India website to view the remaining tenders, filter by category,
-          and open the official tender pages.
-        </p>
-        """
-        if tender_rows
-        else """
-        <p style="margin:18px 0 0;color:#fbbf24;font-size:14px;line-height:1.6">
-          No newly added tender rows were available for the overview. Visit the dashboard for the latest active tenders.
-        </p>
-        """
-    )
     dashboard_url = get_settings().FRONTEND_URL
+    table_html = _tenders_table((tenders or [])[:15])
     html = _shell(
-        title="Printing tender categories update",
+        title="Daily Printing Tenders Digest",
         body=f"""
-        <p style="margin:0 0 18px;color:{MUTED};font-size:15px;line-height:1.6">
-          PrintTender India is tracking active tender opportunities across all major printing categories.
-          Open the dashboard to search, filter, and apply from the latest available listings.
+        <p style="margin:0 0 16px;color:{MUTED};font-size:15px;line-height:1.6">
+          Here is your daily overview of active government printing press tenders from across India.
         </p>
-        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin:0 0 18px">
-          {category_rows}
-        </table>
-        {tender_section}
-        {_button("View All Tender Categories", dashboard_url)}
+        {table_html}
+        {_open_site_button(dashboard_url)}
         """,
     )
     return _send(
         to_email,
-        "PrintTender India: tender opportunities across all categories",
+        "PrintTender India: Daily Tenders Update",
         html,
-        f"PrintTender India is tracking tender opportunities across all printing categories. "
-        f"See 3 newly added tenders and visit {dashboard_url} for the rest.",
+        f"PrintTender India daily printing tender digest. Visit {dashboard_url} to view all tenders.",
     )
+
+
+def _open_site_button(url: str) -> str:
+    return f"""
+    <div style="text-align:center;margin:28px 0 12px">
+      <a href="{escape(url)}" style="display:inline-block;background:{SAFFRON};color:#111827;text-decoration:none;font-weight:800;font-size:15px;border-radius:8px;padding:14px 28px;box-shadow:0 4px 12px rgba(249,115,22,0.3)">
+        Open Site to View All Tenders
+      </a>
+    </div>
+    """
+
+
+def _tenders_table(tenders: list[Any]) -> str:
+    if not tenders:
+        return f'<p style="margin:16px 0;color:{MUTED};font-size:14px">No active tenders available today.</p>'
+
+    rows = []
+    for idx, t in enumerate(tenders, 1):
+        title = _get(t, "title") or "Tender notice"
+        organisation = _get(t, "organisation") or "Not specified"
+        state = _get(t, "state") or "India"
+        portal_source = _get(t, "portal_source") or "Portal"
+        ref_number = _get(t, "ref_number") or ""
+        deadline = _get(t, "bid_end_date")
+        value = _get(t, "value_inr")
+        url = _deep_link_for(t)
+
+        deadline_label, deadline_color = _deadline_display(deadline)
+        value_label = _value_display(value) or "-"
+        ref_display = ref_number[:18] + ("..." if len(ref_number) > 18 else "")
+
+        bg_color = "#172033" if idx % 2 == 1 else "#1f2937"
+        rows.append(f"""
+        <tr style="background:{bg_color};border-bottom:1px solid rgba(255,255,255,0.06)">
+          <td style="padding:10px 8px;vertical-align:top;color:{MUTED};font-size:12px;font-weight:700">{idx}</td>
+          <td style="padding:10px 8px;vertical-align:top">
+            <div style="font-weight:700;color:{TEXT};font-size:13px;line-height:1.35;margin-bottom:3px">{escape(str(title))}</div>
+            <div style="color:{MUTED};font-size:11px">{escape(str(organisation))} &bull; <span style="color:#cbd5e1">{escape(str(state))}</span></div>
+          </td>
+          <td style="padding:10px 8px;vertical-align:top;font-size:11px;color:{MUTED}">
+            <strong style="color:{TEXT}">{escape(str(portal_source))}</strong><br>
+            <span style="font-family:monospace;font-size:10px">{escape(str(ref_display))}</span>
+          </td>
+          <td style="padding:10px 8px;vertical-align:top;font-size:11px;color:{deadline_color};font-weight:700">{escape(deadline_label)}</td>
+          <td style="padding:10px 8px;vertical-align:top;text-align:right;font-size:11px;font-family:monospace;color:{TEXT};font-weight:700">{escape(value_label)}</td>
+          <td style="padding:10px 8px;vertical-align:top;text-align:center">
+            <a href="{escape(url)}" style="display:inline-block;background:{SAFFRON};color:#111827;text-decoration:none;font-weight:800;font-size:11px;border-radius:4px;padding:5px 9px;white-space:nowrap">View</a>
+          </td>
+        </tr>
+        """)
+
+    return f"""
+    <div style="overflow-x:auto;margin:16px 0;border:1px solid rgba(255,255,255,0.08);border-radius:8px">
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;width:100%;font-size:13px">
+        <thead>
+          <tr style="background:#0f172a;border-bottom:2px solid {SAFFRON}">
+            <th style="padding:10px 8px;text-align:left;color:{MUTED};font-size:11px;text-transform:uppercase">#</th>
+            <th style="padding:10px 8px;text-align:left;color:{MUTED};font-size:11px;text-transform:uppercase">Tender Title & Organisation</th>
+            <th style="padding:10px 8px;text-align:left;color:{MUTED};font-size:11px;text-transform:uppercase">Portal / Ref</th>
+            <th style="padding:10px 8px;text-align:left;color:{MUTED};font-size:11px;text-transform:uppercase">Deadline</th>
+            <th style="padding:10px 8px;text-align:right;color:{MUTED};font-size:11px;text-transform:uppercase">Value</th>
+            <th style="padding:10px 8px;text-align:center;color:{MUTED};font-size:11px;text-transform:uppercase">Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          {''.join(rows)}
+        </tbody>
+      </table>
+    </div>
+    """
 
 
 def send_unsubscribe_confirmation_email(

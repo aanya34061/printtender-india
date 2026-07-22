@@ -7,7 +7,7 @@ import { useToastStore } from "../store/toastStore.js";
 
 function portalBadgeClass(src) {
   if (!src) return "badge badge-other";
-  if (src === "CPPP" || src === "etenders.gov.in") return "badge badge-cppp";
+  if (src === "CPPP") return "badge badge-cppp";
   if (src === "GeM" || src === "gem.gov.in") return "badge badge-gem";
   if (isBankPortal(src)) return "badge badge-bank";
   if ([
@@ -71,7 +71,6 @@ function isPortalSearchFlowTender(portalSource, linkType) {
     linkType === "search" &&
     [
       "CPPP",
-      "etenders.gov.in",
       "MP Tenders",
       "eproc.mp.gov.in",
       "Maharashtra Tenders",
@@ -154,7 +153,7 @@ export default function TenderDetailDrawer({ tenderId, onClose, onSetAlert }) {
       if (host.includes("eproc.mp.gov.in")) return "eproc.mp.gov.in";
       if (host.includes("mptenders.gov.in")) return "MP Tenders";
       if (host.includes("timesofindia") || host.includes("indiatimes")) return "TOI Tenders";
-      if (host.includes("etenders.gov.in")) return "etenders.gov.in";
+      if (host.includes("etenders.gov.in")) return "CPPP";
       if (host.includes("eprocure") || host.includes("eprocure.gov.in")) return "CPPP";
       if (host.includes("gem") || host.includes("gecmart") || host.includes("gems") || host.includes("gem.gov.in")) return "gem.gov.in";
       if (host.includes("tenderdekho")) return "TenderDekho";
@@ -188,14 +187,14 @@ export default function TenderDetailDrawer({ tenderId, onClose, onSetAlert }) {
   }
 
   async function handleApply() {
-    if (!tender?.portal_url) return;
-    const destination = tender.portal_url;
+    const destination = tender?.portal_open_url || tender?.portal_url;
+    if (!destination) return;
     if (usesPortalSearchFlow && tender.ref_number) {
       try {
         await navigator.clipboard.writeText(tender.ref_number);
-        add("Tender page opened and ref copied", "info");
+        add("Official portal opened and ref copied", "info");
       } catch {
-        add("Tender page opened", "info");
+        add("Official portal opened", "info");
       }
     } else if (tender.link_type === "search") {
       add("🔍 No direct link — opening portal search", "info");

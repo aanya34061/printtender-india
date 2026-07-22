@@ -18,6 +18,7 @@ from app.fetchers.banks import (
 )
 from app.fetchers.cppp import CPPPFetcher
 from app.fetchers.gem import (
+    GeMFetcher,
     _pick_best_gem_href,
     _pick_gem_primary_candidate,
     _pick_gem_title_from_candidates,
@@ -270,7 +271,7 @@ def test_mp_tenders_rebuilds_brittle_advanced_search_links() -> None:
     assert len(tenders) == 1
     assert tenders[0]["tender_id"] == "2026_DOP_1"
     assert "FrontEndTendersByKeyword" in tenders[0]["portal_url"]
-    assert "keyword=MP-CAL-001" in tenders[0]["portal_url"]
+    assert "keyword=2026_DOP_1" in tenders[0]["portal_url"]
     assert "SWp8FvorQMqWExhnmC" not in tenders[0]["portal_url"]
 
 
@@ -301,8 +302,53 @@ def test_state_fetcher_rebuilds_brittle_advanced_search_links() -> None:
 
     assert len(tenders) == 1
     assert tenders[0]["tender_id"] == "2026_DOP_1"
-    assert "FrontEndTendersByNIT" in tenders[0]["portal_url"]
+    assert "FrontEndTendersByKeyword" in tenders[0]["portal_url"]
+    assert "keyword=2026_DOP_1" in tenders[0]["portal_url"]
     assert "SWp8FvorQMqWExhnmC" not in tenders[0]["portal_url"]
+
+
+@respx.mock
+def test_gem_fetcher_uses_official_json_data_and_direct_document_link() -> None:
+    page = """<script>$.ajax({data: {'csrf_bd_gem_nk': 'token-123'}});</script>"""
+    respx.get("https://bidplus.gem.gov.in/all-bids").mock(
+        return_value=httpx.Response(200, text=page)
+    )
+    data_route = respx.post("https://bidplus.gem.gov.in/all-bids-data").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "code": 200,
+                "response": {
+                    "response": {
+                        "docs": [
+                            {
+                                "b_id": [9420823],
+                                "b_bid_number": ["GEM/2026/B/7621949"],
+                                "b_category_name": ["Printing of Log Sheets"],
+                                "ba_official_details_deptName": [
+                                    "Energy Department Uttar Pradesh"
+                                ],
+                                "final_end_date_sort": [
+                                    "2026-07-19T15:00:00Z"
+                                ],
+                            }
+                        ]
+                    }
+                },
+            },
+        )
+    )
+
+    tenders = GeMFetcher().fetch("printing")
+
+    assert len(tenders) == 1
+    assert tenders[0]["ref_number"] == "GEM/2026/B/7621949"
+    assert tenders[0]["tender_id"] == "9420823"
+    assert tenders[0]["portal_url"] == (
+        "https://bidplus.gem.gov.in/showbidDocument/9420823"
+    )
+    request_payload = data_route.calls[0].request.content.decode()
+    assert "printing" in request_payload
 
 
 def test_mp_tenders_keyword_match_avoids_substring_false_positive() -> None:
@@ -468,7 +514,7 @@ def test_indian_bank_fetcher_prefers_gem_link_and_extracts_ref() -> None:
       <a href="/wp-content/uploads/2026/11/diary-calendars.pdf">Tender document</a>
     </section>
     """
-    respx.get("https://indianbank.bank.in/tenders/").mock(
+    respx.get("https://indianbank.bank.in/HI/tender/").mock(
         return_value=httpx.Response(200, text=html)
     )
 
@@ -491,7 +537,7 @@ def test_uco_bank_fetcher_deduplicates_multiple_links_in_same_tender_block() -> 
       <a href="/docs/uco-annual-report-annexure.pdf">Annexure</a>
     </div>
     """
-    respx.get("https://www.uco.bank.in/tenders").mock(
+    respx.get("https://www.uco.bank.in/en/tenders").mock(
         return_value=httpx.Response(200, text=html)
     )
 

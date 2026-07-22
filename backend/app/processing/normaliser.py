@@ -131,6 +131,16 @@ def normalise(raw: list[dict]) -> pd.DataFrame:
 
 def parse_bid_end_date(value: object) -> datetime | None:
     raw_text = str(value or "").strip()
+    if not raw_text:
+        return None
+    try:
+        if "T" in raw_text or raw_text.endswith("Z"):
+            iso_text = raw_text.replace("Z", "+00:00")
+            dt = datetime.fromisoformat(iso_text)
+            return dt.astimezone(timezone.utc)
+    except Exception:
+        pass
+
     parsed = dateparser.parse(
         raw_text,
         settings={
@@ -158,7 +168,7 @@ def is_past_deadline(value: datetime | None) -> bool:
 def is_active_tender(portal_source: str, bid_end_date: datetime | None) -> bool:
     if bid_end_date is not None:
         return bid_end_date > datetime.now(timezone.utc)
-    return portal_source == "LIC Tenders"
+    return True
 
 
 def normalise_state(value: object) -> str:

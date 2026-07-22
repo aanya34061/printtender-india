@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Response
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy import distinct, func, select
+from sqlalchemy import case, distinct, func, select, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import async_session, get_db
@@ -20,29 +20,47 @@ from app.sources import (
 )
 
 router = APIRouter()
-STATS_CACHE_TTL_SECONDS = 300
+STATS_CACHE_TTL_SECONDS = 30
 BUSINESS_TIMEZONE = ZoneInfo("Asia/Kolkata")
 _STATS_CACHE: dict[str, object] = {"expires_at": 0.0, "payload": None}
 
 
+def _configured_portal_labels() -> tuple[str, ...]:
+    labels: list[str] = []
+    seen: set[str] = set()
+    for source in ACTIVE_TENDER_SOURCES:
+        label = display_source(source) or canonicalize_source(source) or source
+        if label not in seen:
+            labels.append(label)
+            seen.add(label)
+    return tuple(labels)
+
+
+def _empty_portal_counts() -> dict[str, int]:
+    return {label: 0 for label in _configured_portal_labels()}
+
+
 def fallback_stats():
+    by_portal = _empty_portal_counts()
     return {
         "total_active": 0,
         "total_today": 0,
         "expiring_7_days": 0,
         "new_since_yesterday": 0,
         "states_covered": 0,
-        "by_portal": {},
+        "by_portal": by_portal,
         "by_source_category": {"portal": 0, "newspaper": 0},
         "last_fetch": None,
-        "portals_count": 0,
+        "portals_count": len(by_portal),
         "keywords_tracked": 0,
     }
 
 
 @router.get("")
-async def get_stats(response: Response, session: AsyncSession = Depends(get_db)) -> dict:
-    response.headers["Cache-Control"] = "public, max-age=300, stale-while-revalidate=3600"
+async def get_stats(
+    response: Response, session: AsyncSession = Depends(get_db)
+) -> dict:
+    response.headers["Cache-Control"] = "no-store"
     now_ts = datetime.now(timezone.utc).timestamp()
     cached_payload = _STATS_CACHE.get("payload")
     if (
@@ -61,16 +79,19 @@ async def get_stats(response: Response, session: AsyncSession = Depends(get_db))
     except Exception as exc:
         # Log exception to a file for debugging and re-raise
         try:
-            with open('/tmp/printtender_stats_error.log', 'a') as fh:
+            with open("/tmp/printtender_stats_error.log", "a") as fh:
                 import traceback
-                fh.write(str(datetime.now(timezone.utc)) + ' - ' + repr(exc) + '\n')
-                fh.write(traceback.format_exc() + '\n')
+
+                fh.write(str(datetime.now(timezone.utc)) + " - " + repr(exc) + "\n")
+                fh.write(traceback.format_exc() + "\n")
         except Exception:
             pass
         raise
 
 
-async def _build_stats_payload(session: AsyncSession, now_ts: float | None = None) -> dict:
+async def _build_stats_payload(
+    session: AsyncSession, now_ts: float | None = None
+) -> dict:
     try:
         now = datetime.now(timezone.utc)
         today_start, tomorrow_start = _business_day_bounds(now)
@@ -78,44 +99,56 @@ async def _build_stats_payload(session: AsyncSession, now_ts: float | None = Non
         seven_days = now + timedelta(days=7)
         printing_relevance = build_printing_relevance_predicate(Tender)
 
+        open_bid = or_(Tender.bid_end_date > now, Tender.bid_end_date.is_(None))
+
         # Combine multiple counts into a single query for performance
         stats_query = select(
-            func.count().filter(
+            func.count()
+            .filter(
                 Tender.is_active.is_(True),
                 Tender.portal_source.in_(ACTIVE_TENDER_SOURCES),
-                Tender.bid_end_date > now,
-                printing_relevance
-            ).label("total_active"),
-            func.count().filter(
+                open_bid,
+                printing_relevance,
+            )
+            .label("total_active"),
+            func.count()
+            .filter(
                 Tender.is_active.is_(True),
                 Tender.published_date >= today_start,
                 Tender.published_date < tomorrow_start,
                 Tender.portal_source.in_(ACTIVE_TENDER_SOURCES),
-                Tender.bid_end_date > now,
-                printing_relevance
-            ).label("total_today"),
-            func.count().filter(
+                open_bid,
+                printing_relevance,
+            )
+            .label("total_today"),
+            func.count()
+            .filter(
                 Tender.is_active.is_(True),
                 Tender.portal_source.in_(ACTIVE_TENDER_SOURCES),
                 Tender.bid_end_date > now,
                 Tender.bid_end_date <= seven_days,
-                printing_relevance
-            ).label("expiring_7_days"),
-            func.count().filter(
+                printing_relevance,
+            )
+            .label("expiring_7_days"),
+            func.count()
+            .filter(
                 Tender.is_active.is_(True),
                 Tender.published_date >= yesterday_start,
                 Tender.published_date < today_start,
                 Tender.portal_source.in_(ACTIVE_TENDER_SOURCES),
-                Tender.bid_end_date > now,
-                printing_relevance
-            ).label("new_since_yesterday"),
-            func.count(distinct(Tender.state)).filter(
+                open_bid,
+                printing_relevance,
+            )
+            .label("new_since_yesterday"),
+            func.count(distinct(Tender.state))
+            .filter(
                 Tender.is_active.is_(True),
                 Tender.portal_source.in_(ACTIVE_TENDER_SOURCES),
-                Tender.bid_end_date > now,
+                open_bid,
                 printing_relevance,
-                Tender.state.is_not(None)
-            ).label("states_covered")
+                Tender.state.is_not(None),
+            )
+            .label("states_covered"),
         )
 
         stats_result = await session.execute(stats_query)
@@ -137,13 +170,17 @@ async def _build_stats_payload(session: AsyncSession, now_ts: float | None = Non
             select(Tender.portal_source, Tender.portal_url, func.count().label("cnt"))
             .where(Tender.is_active.is_(True))
             .where(Tender.portal_source.in_(ACTIVE_TENDER_SOURCES))
-            .where(Tender.bid_end_date > now)
+            .where(open_bid)
             .where(printing_relevance)
             .group_by(Tender.portal_source, Tender.portal_url)
         )
-        by_portal: dict[str, int] = {}
+        by_portal = _empty_portal_counts()
         for source, portal_url, cnt in rows:
-            label = display_source(source, portal_url) or canonicalize_source(source) or "Unknown"
+            label = (
+                display_source(source, portal_url)
+                or canonicalize_source(source)
+                or "Unknown"
+            )
             by_portal[label] = by_portal.get(label, 0) + cnt
 
         by_source_category = {"portal": 0, "newspaper": 0}
@@ -154,7 +191,9 @@ async def _build_stats_payload(session: AsyncSession, now_ts: float | None = Non
                 by_source_category["portal"] += cnt
 
         alert_rows = await session.scalars(
-            select(AlertSubscription.keywords).where(AlertSubscription.is_active.is_(True))
+            select(AlertSubscription.keywords).where(
+                AlertSubscription.is_active.is_(True)
+            )
         )
         keywords_tracked = len({kw for kws in alert_rows for kw in (kws or [])})
 
@@ -167,7 +206,7 @@ async def _build_stats_payload(session: AsyncSession, now_ts: float | None = Non
             "by_portal": by_portal,
             "by_source_category": by_source_category,
             "last_fetch": last_fetch,
-            "portals_count": len(by_portal),
+            "portals_count": len(_configured_portal_labels()),
             "keywords_tracked": keywords_tracked,
         }
         now_ts = now_ts or datetime.now(timezone.utc).timestamp()
@@ -207,26 +246,54 @@ def _business_day_bounds(now: datetime) -> tuple[datetime, datetime]:
 
 @router.get("/portals/status")
 async def portal_status(session: AsyncSession = Depends(get_db)) -> list[dict]:
+    recent_cutoff = datetime.now(timezone.utc) - timedelta(minutes=20)
     subq = (
         select(FetchLog.portal, func.max(FetchLog.fetched_at).label("max_fetched"))
         .where(FetchLog.portal.in_(ACTIVE_FETCH_SOURCES))
         .group_by(FetchLog.portal)
         .subquery()
     )
-    rows = await session.execute(
+    latest_rows = await session.execute(
         select(FetchLog).join(
             subq,
             (FetchLog.portal == subq.c.portal)
             & (FetchLog.fetched_at == subq.c.max_fetched),
         )
     )
-    logs = rows.scalars().all()
+    logs = latest_rows.scalars().all()
+
+    recent_rows = await session.execute(
+        select(
+            FetchLog.portal,
+            func.max(FetchLog.fetched_at).label("last_fetch"),
+            func.sum(FetchLog.tenders_found).label("tenders_found"),
+            func.sum(case((FetchLog.status == "ok", 1), else_=0)).label("ok_count"),
+        )
+        .where(FetchLog.portal.in_(ACTIVE_FETCH_SOURCES))
+        .where(FetchLog.fetched_at >= recent_cutoff)
+        .group_by(FetchLog.portal)
+    )
+    recent_by_portal = {row.portal: row for row in recent_rows}
     return [
         {
             "portal": log.portal,
-            "last_fetch": log.fetched_at,
-            "status": log.status,
-            "tenders_found": log.tenders_found,
+            "last_fetch": (
+                recent_by_portal[log.portal].last_fetch
+                if log.portal in recent_by_portal
+                else log.fetched_at
+            ),
+            "status": (
+                "ok"
+                if log.portal in recent_by_portal
+                and (recent_by_portal[log.portal].ok_count or 0) > 0
+                else log.status
+            ),
+            "tenders_found": (
+                recent_by_portal[log.portal].tenders_found
+                if log.portal in recent_by_portal
+                else log.tenders_found
+            )
+            or 0,
         }
         for log in logs
     ]

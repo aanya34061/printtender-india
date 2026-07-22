@@ -32,16 +32,16 @@ def _make_tender_row(**kwargs):
     defaults = dict(
         id=1,
         ref_number="REF-001",
-        title="Printing of Government Forms",
+        title="Printing of answer booklets and stationery",
         organisation="DoPT",
         state="Delhi",
-        portal_source="TOI Tenders",
+        portal_source="LIC Tenders",
         category="printing",
         value_inr=Decimal("100000"),
         emd_amount=Decimal("5000"),
-        bid_end_date=datetime(2026, 6, 30, tzinfo=timezone.utc),
+        bid_end_date=datetime(2026, 12, 31, tzinfo=timezone.utc),
         published_date=datetime(2026, 4, 1, tzinfo=timezone.utc),
-        portal_url="https://timesofindia.indiatimes.com/tenders/1",
+        portal_url="https://licindia.in/tenders",
         tender_id=None,
         link_type="deep",
         link_verified=False,
@@ -84,7 +84,9 @@ def _make_session(
         for row in scalars_returns or []:
             wrapped = MagicMock()
             wrapped.total_count = total_count
-            wrapped.__getitem__.side_effect = lambda idx, row=row: row if idx == 0 else total_count
+            wrapped.__getitem__.side_effect = lambda idx, row=row: (
+                row if idx == 0 else total_count
+            )
             wrapped_rows.append(wrapped)
         exec_result.all.return_value = wrapped_rows
     if execute_returns is not None:
@@ -244,7 +246,7 @@ async def test_list_tenders_200():
         assert r.status_code == 200
         body = r.json()
         assert "tenders" in body and "total" in body and "pages" in body
-        assert body["tenders"][0]["portal_source"] == "TOI Tenders"
+        assert body["tenders"][0]["portal_source"] == "LIC Tenders"
     finally:
         _clear()
 
@@ -294,7 +296,7 @@ def test_state_filter_keeps_national_bank_portals_visible_for_all_states():
     assert "Central Bank of India Tenders" in compiled
 
 
-def test_default_tender_query_includes_active_lic_rows_without_deadline():
+def test_default_tender_query_requires_an_open_deadline_for_all_portals():
     qry = tenders_api._build_base(
         q="",
         state=None,
@@ -312,7 +314,7 @@ def test_default_tender_query_includes_active_lic_rows_without_deadline():
         )
     )
 
-    assert "tenders.portal_source = 'LIC Tenders'" in compiled
+    assert "tenders.bid_end_date > now()" in compiled
     assert "tenders.bid_end_date IS NULL" in compiled
 
 
@@ -338,7 +340,7 @@ async def test_list_tenders_canonicalizes_gem_to_domain_label():
 
 
 @pytest.mark.asyncio
-async def test_list_tenders_allows_etenders_domain_alias_for_cppp():
+async def test_list_tenders_groups_etenders_domain_under_cppp():
     row = _make_tender_row(
         state="Delhi",
         portal_source="CPPP",
@@ -349,11 +351,188 @@ async def test_list_tenders_allows_etenders_domain_alias_for_cppp():
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as c:
-            r = await c.get("/api/tenders?portal=etenders.gov.in")
+            r = await c.get("/api/tenders?portal=CPPP")
         assert r.status_code == 200
         body = r.json()
         assert body["total"] == 1
-        assert body["tenders"][0]["portal_source"] == "etenders.gov.in"
+        assert body["tenders"][0]["portal_source"] == "CPPP"
+    finally:
+        _clear()
+
+
+@pytest.mark.asyncio
+async def test_list_tenders_exposes_official_nic_portal_search_url():
+    row = _make_tender_row(
+        portal_source="MP Tenders",
+        ref_number="14",
+        portal_url=(
+            "https://mptenders.gov.in/nicgep/app?page=FrontEndTendersByKeyword"
+            "&service=page&keyword=14&searchBy=0&searchDateType=TD"
+        ),
+        tender_id="2026_DC_505875_1",
+        link_verified=False,
+    )
+    _override_db(_make_session(scalar_returns=[1, 1], scalars_returns=[row]))
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as c:
+            r = await c.get("/api/tenders")
+        assert r.status_code == 200
+        tender = r.json()["tenders"][0]
+        assert tender["portal_url"] == (
+            "https://mptenders.gov.in/nicgep/app?page=FrontEndTendersByKeyword"
+            "&service=page&keyword=2026_DC_505875_1&searchBy=0&searchDateType=TD"
+        )
+        assert tender["portal_open_url"] == (
+            "http://test/api/tenders/portal-launch?portal_source=MP+Tenders"
+            "&ref_number=14&tender_id=2026_DC_505875_1"
+        )
+        assert tender["link_type"] == "search"
+    finally:
+        _clear()
+
+
+@pytest.mark.asyncio
+async def test_list_tenders_routes_tenderdekho_gem_rows_to_gem_search():
+    row = _make_tender_row(
+        portal_source="TenderDekho",
+        ref_number="BAREILLY",
+        title=(
+            "LIC Life Insurance Corporation Printing Forms Tender Bareilly "
+            "Uttar Pradesh 2026 GEM Service"
+        ),
+        organisation="LIC Life Insurance Corporation",
+        state="Uttar Pradesh",
+        portal_url="https://tenderdekho.com/tender-detail/td-2iULMkDygQ",
+        tender_id="td-2iULMkDygQ",
+        link_verified=True,
+    )
+    _override_db(_make_session(scalar_returns=[1, 1], scalars_returns=[row]))
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as c:
+            r = await c.get("/api/tenders")
+        assert r.status_code == 200
+        tender = r.json()["tenders"][0]
+        assert tender["portal_url"].startswith(
+            "https://bidplus.gem.gov.in/all-bids?search_bid="
+        )
+        assert tender["portal_open_url"] is None
+        assert "tenderdekho.com" not in tender["portal_url"]
+        assert tender["link_type"] == "search"
+    finally:
+        _clear()
+
+
+@pytest.mark.asyncio
+async def test_portal_launch_with_tender_id_resolves_exact_state_up_tender(monkeypatch):
+    calls = []
+
+    def fake_resolve(portal_source: str, ref_number: str, tender_id: str | None):
+        calls.append((portal_source, ref_number, tender_id))
+        return (
+            "https://etender.up.nic.in",
+            "https://etender.up.nic.in/nicgep/app?component=%24DirectLink_0&page=FrontEndAdvancedSearchResult&service=direct&session=T&sp=SACTUAL",
+        )
+
+    monkeypatch.setattr(tenders_api, "_resolve_portal_detail_url", fake_resolve)
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as c:
+        r = await c.get(
+            "/api/tenders/portal-launch",
+            params={
+                "portal_source": "State-UP",
+                "ref_number": "COMPSTAT/2026-27/P-12087",
+                "tender_id": "2026_UPSFF_1160290_1",
+            },
+        )
+    assert r.status_code == 200
+    body = r.text
+    assert "https://etender.up.nic.in/nicgep/app" in body
+    assert "sp=SACTUAL" in body
+    assert calls == [
+        ("State-UP", "COMPSTAT/2026-27/P-12087", "2026_UPSFF_1160290_1")
+    ]
+
+
+@pytest.mark.asyncio
+async def test_portal_view_supports_state_up(monkeypatch):
+    row = _make_tender_row(
+        portal_source="State-UP",
+        state="Uttar Pradesh",
+        ref_number="COMPSTAT/2026-27/P-12087",
+        tender_id="2026_UPSFF_1160290_1",
+    )
+    _override_db(_make_session(get_returns=row))
+    calls = []
+
+    def fake_proxy(portal_source: str, ref_number: str, tender_id: str | None):
+        calls.append((portal_source, ref_number, tender_id))
+        return tenders_api.HTMLResponse("<html>UP tender</html>")
+
+    monkeypatch.setattr(tenders_api, "_portal_proxy_response", fake_proxy)
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as c:
+            r = await c.get("/api/tenders/1/portal-view")
+        assert r.status_code == 200
+        assert calls == [
+            ("State-UP", "COMPSTAT/2026-27/P-12087", "2026_UPSFF_1160290_1")
+        ]
+    finally:
+        _clear()
+
+
+def test_portal_detail_match_prefers_stable_tender_id_over_short_reference():
+    html = """
+    <table>
+      <tr><td><a href="/nicgep/app?component=%24DirectLink_0&amp;sp=SWRONG">
+        [Unrelated tender][14][2026_OTHER_100_1]
+      </a></td></tr>
+      <tr><td><a href="/nicgep/app?component=%24DirectLink_0&amp;sp=SCORRECT">
+        [Regarding the Purchase of Stationery][14][2026_DC_505875_1]
+      </a></td></tr>
+    </table>
+    """
+
+    link = tenders_api._matching_portal_detail_link(
+        html,
+        base_url="https://mptenders.gov.in/nicgep/app",
+        expected_terms=["2026_DC_505875_1", "14"],
+    )
+
+    assert link is not None
+    assert "sp=SCORRECT" in link
+
+
+@pytest.mark.asyncio
+async def test_portal_view_falls_back_to_official_stable_id_search(monkeypatch):
+    row = _make_tender_row(
+        portal_source="MP Tenders",
+        state="Madhya Pradesh",
+        ref_number="14",
+        tender_id="2026_DC_505875_1",
+    )
+    _override_db(_make_session(get_returns=row))
+
+    def unavailable_proxy(*_args, **_kwargs):
+        raise tenders_api.HTTPException(
+            status_code=404, detail="Tender page not found on portal"
+        )
+
+    monkeypatch.setattr(tenders_api, "_portal_proxy_response", unavailable_proxy)
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as c:
+            r = await c.get("/api/tenders/1/portal-view")
+        assert r.status_code == 200
+        assert "mptenders.gov.in/nicgep/app" in r.text
+        assert "keyword=2026_DC_505875_1" in r.text
     finally:
         _clear()
 
@@ -378,7 +557,7 @@ async def test_list_tenders_extracts_embedded_value_for_existing_rows():
 
 
 @pytest.mark.asyncio
-async def test_list_tenders_keeps_cppp_distinct_from_etenders():
+async def test_list_tenders_cppp_filter_includes_all_cppp_urls():
     row = _make_tender_row(
         state="Delhi",
         portal_source="CPPP",
@@ -467,7 +646,14 @@ async def test_get_tender_exposes_mp_tenders_source_and_url():
         assert r.status_code == 200
         body = r.json()
         assert body["portal_source"] == "MP Tenders"
-        assert "mptenders.gov.in" in body["portal_url"]
+        assert body["portal_url"] == (
+            "https://mptenders.gov.in/nicgep/app?page=FrontEndTendersByKeyword"
+            "&service=page&keyword=REF-001&searchBy=0&searchDateType=TD"
+        )
+        assert body["portal_open_url"] == (
+            "http://test/api/tenders/portal-launch?portal_source=MP+Tenders"
+            "&ref_number=REF-001&tender_id=S123"
+        )
     finally:
         _clear()
 
@@ -495,7 +681,7 @@ async def test_get_tender_canonicalizes_gem_to_domain_label():
 
 
 @pytest.mark.asyncio
-async def test_get_tender_rewrites_brittle_mp_session_link_to_direct_nit():
+async def test_get_tender_rebuilds_brittle_mp_session_link_to_official_search():
     row = _make_tender_row(
         portal_source="MP Tenders",
         state="Madhya Pradesh",
@@ -517,7 +703,7 @@ async def test_get_tender_rewrites_brittle_mp_session_link_to_direct_nit():
         assert body["portal_source"] == "MP Tenders"
         assert body["portal_url"] == (
             "https://mptenders.gov.in/nicgep/app?page=FrontEndTendersByKeyword"
-            "&service=page&keyword=MP-CAL-001&searchBy=0&searchDateType=TD"
+            "&service=page&keyword=2026_DOP_1&searchBy=0&searchDateType=TD"
         )
         assert body["link_type"] == "search"
     finally:
@@ -543,7 +729,7 @@ async def test_get_tender_extracts_embedded_value_for_existing_rows():
 
 
 @pytest.mark.asyncio
-async def test_get_tender_rewrites_brittle_maharashtra_session_link_to_search():
+async def test_get_tender_rebuilds_brittle_maharashtra_session_link_to_official_search():
     row = _make_tender_row(
         portal_source="State-MH",
         state="Maharashtra",
@@ -573,7 +759,7 @@ async def test_get_tender_rewrites_brittle_maharashtra_session_link_to_search():
 
 
 @pytest.mark.asyncio
-async def test_get_tender_rewrites_maharashtra_direct_nit_to_search():
+async def test_get_tender_rebuilds_maharashtra_direct_nit_to_official_search():
     row = _make_tender_row(
         portal_source="State-MH",
         state="Maharashtra",
@@ -595,7 +781,7 @@ async def test_get_tender_rewrites_maharashtra_direct_nit_to_search():
         assert body["portal_source"] == "Maharashtra Tenders"
         assert body["portal_url"] == (
             "https://mahatenders.gov.in/nicgep/app?page=FrontEndTendersByKeyword"
-            "&service=page&keyword=MH-CAL-001&searchBy=0&searchDateType=TD"
+            "&service=page&keyword=2026_MSBSH_1300024_2&searchBy=0&searchDateType=TD"
         )
         assert body["link_type"] == "search"
     finally:
@@ -607,7 +793,7 @@ async def test_portal_launch_returns_redirect_page(monkeypatch):
     monkeypatch.setattr(
         tenders_api,
         "_resolve_portal_detail_url",
-        lambda portal_source, ref_number: (
+        lambda portal_source, ref_number, tender_id=None: (
             "https://mptenders.gov.in",
             "https://mptenders.gov.in/nicgep/app?component=%24DirectLink&page=FrontEndTendersByNIT&service=direct&session=T&sp=S2026_UAD_505750_1",
         ),
@@ -633,7 +819,7 @@ async def test_portal_launch_supports_cppp(monkeypatch):
     monkeypatch.setattr(
         tenders_api,
         "_resolve_portal_detail_url",
-        lambda portal_source, ref_number: (
+        lambda portal_source, ref_number, tender_id=None: (
             "https://eprocure.gov.in",
             "https://eprocure.gov.in/eprocure/app?component=%24DirectLink&page=FrontEndTendersByNIT&service=direct&session=T&sp=S12345678",
         ),
@@ -655,7 +841,7 @@ async def test_portal_launch_supports_cppp(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_get_tender_rewrites_gem_document_url_to_bid_search():
+async def test_get_tender_preserves_exact_gem_document_url():
     row = _make_tender_row(
         portal_source="GeM",
         ref_number="GEM/2026/B/7142926",
@@ -672,9 +858,9 @@ async def test_get_tender_rewrites_gem_document_url_to_bid_search():
         assert r.status_code == 200
         body = r.json()
         assert body["portal_url"] == (
-            "https://bidplus.gem.gov.in/all-bids?search_bid=GEM%2F2026%2FB%2F7142926"
+            "https://bidplus.gem.gov.in/showbidDocument/8876535"
         )
-        assert body["link_type"] == "search"
+        assert body["link_type"] == "direct"
     finally:
         _clear()
 
@@ -752,7 +938,7 @@ async def test_get_tender_apply_steps_are_generic():
         ) as c:
             r = await c.get("/api/tenders/1")
         steps = r.json()["apply_steps"]
-        assert any("reference number" in s for s in steps)
+        assert any("Register" in s for s in steps)
     finally:
         _clear()
 
@@ -797,7 +983,7 @@ async def test_get_stats_200():
             scalars_returns=[["printing"]],
             execute_returns=[
                 ("MP Tenders", "https://mptenders.gov.in/nicgep/app", 4),
-                ("TOI Tenders", "https://timesofindia.indiatimes.com/tenders/1", 2),
+                ("LIC Tenders", "https://licindia.in/tenders", 2),
             ],
         )
     )
@@ -819,8 +1005,10 @@ async def test_get_stats_200():
             "portals_count",
         ):
             assert key in body, f"missing key: {key}"
-        assert body["by_portal"] == {"MP Tenders": 4, "TOI Tenders": 2}
-        assert body["portals_count"] == 2
+        assert body["by_portal"]["MP Tenders"] == 4
+        assert body["by_portal"]["LIC Tenders"] == 2
+        assert body["by_portal"]["PNB Tenders"] == 0
+        assert body["portals_count"] == len(stats_api._configured_portal_labels())
     finally:
         _clear()
 
@@ -917,8 +1105,8 @@ async def test_get_stats_splits_cppp_and_etenders_by_url_host():
             r = await c.get("/api/stats")
         assert r.status_code == 200
         body = r.json()
-        assert body["by_portal"]["CPPP"] == 2
-        assert body["by_portal"]["etenders.gov.in"] == 1
+        assert body["by_portal"]["CPPP"] == 3
+        assert "etenders.gov.in" not in body["by_portal"]
     finally:
         _clear()
 
@@ -1103,6 +1291,7 @@ async def test_fetch_trigger():
         mocked.assert_awaited_once()
         kwargs = mocked.await_args.kwargs
         assert kwargs["source_labels"] == fetch_api.LIVE_CRON_PORTAL_SOURCES
+        assert kwargs["max_keywords_per_source"] == fetch_api.FAST_FETCH_KEYWORD_LIMIT
         assert kwargs["include_newspapers"] is False
 
 
@@ -1168,6 +1357,7 @@ async def test_fetch_cron_default_runs_live_portal_sources():
         mocked.assert_awaited_once()
         kwargs = mocked.await_args.kwargs
         assert kwargs["source_labels"] == fetch_api.LIVE_CRON_PORTAL_SOURCES
+        assert kwargs["max_keywords_per_source"] == fetch_api.FAST_FETCH_KEYWORD_LIMIT
         assert kwargs["include_newspapers"] is False
 
 
