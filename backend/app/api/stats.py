@@ -60,7 +60,7 @@ def fallback_stats():
 async def get_stats(
     response: Response, session: AsyncSession = Depends(get_db)
 ) -> dict:
-    response.headers["Cache-Control"] = "no-store"
+    response.headers["Cache-Control"] = "public, max-age=30, s-maxage=60"
     now_ts = datetime.now(timezone.utc).timestamp()
     cached_payload = _STATS_CACHE.get("payload")
     if (

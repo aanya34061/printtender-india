@@ -55,8 +55,10 @@ ASYNC_DATABASE_URL = _asyncpg_url(settings.DATABASE_URL)
 engine = create_async_engine(
     ASYNC_DATABASE_URL,
     pool_pre_ping=True,
-    pool_size=2,
-    max_overflow=0,
+    pool_size=10,
+    max_overflow=10,
+    pool_recycle=300,
+    pool_timeout=15,
     connect_args={"prepared_statement_cache_size": 0, "timeout": 10},
 )
 AsyncSessionLocal = async_sessionmaker(
@@ -80,6 +82,10 @@ async def run_startup_migrations() -> None:
         "ALTER TABLE IF EXISTS tenders ADD COLUMN IF NOT EXISTS link_type VARCHAR(10) DEFAULT 'search'",
         "ALTER TABLE IF EXISTS tenders ADD COLUMN IF NOT EXISTS link_verified BOOLEAN DEFAULT FALSE",
         "CREATE INDEX IF NOT EXISTS idx_tenders_tender_id ON tenders(tender_id)",
+        "CREATE INDEX IF NOT EXISTS idx_tenders_is_active ON tenders(is_active)",
+        "CREATE INDEX IF NOT EXISTS idx_tenders_portal_source ON tenders(portal_source)",
+        "CREATE INDEX IF NOT EXISTS idx_tenders_active_source_fetched ON tenders(is_active, portal_source, fetched_at DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_tenders_active_bid_end ON tenders(is_active, bid_end_date)",
         "ALTER TABLE IF EXISTS alert_subscriptions ADD COLUMN IF NOT EXISTS keyword TEXT DEFAULT 'printing'",
         "UPDATE alert_subscriptions SET keyword = COALESCE(keyword, keywords[1], 'printing') WHERE keyword IS NULL",
         "ALTER TABLE IF EXISTS alert_subscriptions ALTER COLUMN keyword SET NOT NULL",

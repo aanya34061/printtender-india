@@ -701,7 +701,7 @@ async def list_tenders(
     limit: int = Query(default=20, ge=1, le=50),
     session: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
-    response.headers["Cache-Control"] = "no-store"
+    response.headers["Cache-Control"] = "public, max-age=15, s-maxage=30"
     cache_key = _cache_key_for_tender_list(
         request_base_url=str(request.base_url),
         q=q,
