@@ -5,8 +5,7 @@ export function useStats(options = {}) {
   return useQuery({
     queryKey: ["stats"],
     queryFn: () => fetchJSON("/api/stats"),
-    staleTime: 1000 * 30,
-    refetchInterval: options.enabled === false ? false : 1000 * 60,
+    staleTime: 1000 * 60 * 5,
     refetchOnWindowFocus: false,
     ...options,
   });
@@ -16,8 +15,7 @@ export function usePortalStatus() {
   return useQuery({
     queryKey: ["portal-status"],
     queryFn: () => fetchJSON("/api/stats/portals/status"),
-    staleTime: 1000 * 30,
-    refetchInterval: 1000 * 60,
+    staleTime: 1000 * 60 * 5,
     refetchOnWindowFocus: false,
   });
 }

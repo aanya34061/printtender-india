@@ -47,7 +47,7 @@ router = APIRouter()
 SortOption = Literal["deadline_asc", "newest", "value_desc", "value_asc"]
 PORTAL_PROXY_TTL_SECONDS = 20 * 60
 PORTAL_PROXY_SESSIONS: dict[str, dict[str, Any]] = {}
-LIST_CACHE_TTL_SECONDS = 30
+LIST_CACHE_TTL_SECONDS = 60
 LIST_TENDER_CACHE: dict[tuple[Any, ...], tuple[float, dict[str, Any]]] = {}
 NATIONAL_BANK_TENDER_SOURCES = {
     "PNB Tenders",
