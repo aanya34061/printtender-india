@@ -181,21 +181,7 @@ async def test_run_fetch_cycle_schedules_all_portal_scrapers(
 
     import app.fetchers.newspapers as newspapers
 
-    for name in (
-        "scrape_toi",
-        "scrape_ht",
-        "scrape_et",
-        "scrape_thehindu",
-        "scrape_bhaskar",
-        "scrape_patrika",
-        "scrape_naidunia",
-        "scrape_navbharat",
-        "scrape_jagran",
-        "scrape_amarujala",
-        "scrape_tendernotice",
-        "scrape_indiatendernotice",
-        "scrape_publicnotice",
-    ):
+    for name in newspapers.__all__:
         monkeypatch.setattr(newspapers, name, lambda _keyword: [])
 
     count = await fetch_job.run_fetch_cycle()

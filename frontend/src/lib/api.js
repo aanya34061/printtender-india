@@ -1,5 +1,10 @@
 export const API_BASE =
-  import.meta.env.VITE_API_BASE_URL || "https://printtender-india-backend.vercel.app";
+  import.meta.env.VITE_API_BASE_URL ||
+  (typeof window !== "undefined" && window.location.hostname === "localhost"
+    ? window.location.origin
+    : "https://printtender-india-backend.vercel.app");
+
+
 
 export async function fetchJSON(path, { params, json, headers, ...options } = {}) {
   const url = new URL(path, API_BASE);

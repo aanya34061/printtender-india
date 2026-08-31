@@ -764,7 +764,97 @@ def test_lic_fetcher_does_not_treat_archive_table_as_active() -> None:
     assert tenders == []
 
 
+@respx.mock
+def test_newspaper_scrapers_extract_printing_tenders_and_skip_non_printing() -> None:
+    from app.fetchers.newspapers import (
+        scrape_bhaskar,
+        scrape_deshbandhu,
+        scrape_freepressjournal,
+        scrape_haribhoomi,
+        scrape_swadesh,
+        scrape_agniban,
+        scrape_navswadesh,
+        scrape_pradeshtoday,
+        scrape_dabangdunia,
+        scrape_peoplessamachar,
+        scrape_rajexpress,
+    )
+
+    html = """
+    <div>
+      <div class="tender-box">
+        <a href="/tenders/print-books-2026">निविदा सूचना: पुस्तकों एवं उत्तर पुस्तिकाओं का मुद्रण कार्य NIT-2026/01</a>
+      </div>
+      <div class="tender-box">
+        <a href="/tenders/road-construction">निविदा: c.c. road construction work in ward 5</a>
+      </div>
+    </div>
+    """
+    respx.get(url__regex=r"https://.*").mock(return_value=httpx.Response(200, text=html))
+
+    bhaskar_tenders = scrape_bhaskar("books")
+    assert len(bhaskar_tenders) == 1
+    assert bhaskar_tenders[0]["portal_source"] == "Dainik Bhaskar"
+    assert "मुद्रण" in bhaskar_tenders[0]["title"] or "उत्तर पुस्तिका" in bhaskar_tenders[0]["title"]
+    assert bhaskar_tenders[0]["state"] == "Madhya Pradesh"
+
+    deshbandhu_tenders = scrape_deshbandhu("मुद्रण")
+    assert len(deshbandhu_tenders) == 1
+    assert deshbandhu_tenders[0]["portal_source"] == "Deshbandhu"
+
+    fpj_tenders = scrape_freepressjournal("books")
+    assert len(fpj_tenders) == 1
+    assert fpj_tenders[0]["portal_source"] == "Free Press Journal"
+
+    haribhoomi_tenders = scrape_haribhoomi("books")
+    assert len(haribhoomi_tenders) == 1
+    assert haribhoomi_tenders[0]["portal_source"] == "Hari Bhoomi"
+
+
+def test_newspaper_sources_and_aliases() -> None:
+    from app.sources import (
+        NEWSPAPER_SOURCES,
+        PORTAL_SOURCES,
+        ACTIVE_TENDER_SOURCES,
+        canonicalize_source,
+        expand_source_filter,
+        is_active_source,
+    )
+
+    expected_newspapers = [
+        "Dainik Bhaskar",
+        "Nai Dunia",
+        "Patrika",
+        "Dainik Jagran",
+        "Nav Bharat",
+        "Deshbandhu",
+        "Raj Express",
+        "Peoples Samachar",
+        "Dabang Dunia",
+        "Free Press Journal",
+        "Pradesh Today",
+        "Agniban",
+        "Nav Swadesh",
+        "Swadesh",
+        "Hari Bhoomi",
+    ]
+
+    for np in expected_newspapers:
+        assert np in NEWSPAPER_SOURCES
+        assert np in ACTIVE_TENDER_SOURCES
+        assert is_active_source(np) is True
+
+    assert canonicalize_source("Naidunia") == "Nai Dunia"
+    assert canonicalize_source("Rajasthan Patrika") == "Patrika"
+    assert canonicalize_source("Navbharat") == "Nav Bharat"
+
+    assert expand_source_filter("Naidunia") == ("Nai Dunia", "Naidunia")
+    assert expand_source_filter("Rajasthan Patrika") == ("Patrika", "Rajasthan Patrika")
+    assert expand_source_filter("Nav Bharat") == ("Nav Bharat", "Navbharat")
+
+
 def all_result_keys(tenders: list[dict]) -> bool:
     for tender in tenders:
         assert_result_keys(tender)
     return True
+

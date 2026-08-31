@@ -124,6 +124,9 @@ PRINT_KEYWORDS: list[str] = [
     "फाइल",
     "वार्षिक प्रतिवेदन",
     "स्मारिका",
+    "मुद्रण",
+    "छपाई",
+    "प्रकाशन",
     # ── Common government tender search terms ───────────────────────────
     "offset printing",
     "digital printing",
@@ -140,6 +143,19 @@ PRINT_KEYWORDS: list[str] = [
     "letterpress",
     "book binding",
     "lamination",
+    "printing and supply",
+    "supply and printing",
+    "advertisement",
+    "advertisements",
+    "display advertisement",
+    "newspaper advertisement",
+    "publication",
+    "publishing",
+    "public notice",
+    "tender notice",
+    "विज्ञापन",
+    "सूचना",
+    "समाचार पत्र",
 ]
 
 # Alias kept for backwards compatibility

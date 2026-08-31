@@ -10,6 +10,10 @@ from app.keywords import PRINT_KEYWORDS
 
 
 PRINT_SERVICE_TERMS: tuple[str, ...] = (
+    "printing",
+    "printing service",
+    "printing services",
+    "printing work",
     "offset printing",
     "digital printing",
     "security printing",
@@ -27,6 +31,20 @@ PRINT_SERVICE_TERMS: tuple[str, ...] = (
     "supply and printing",
     "printed",
     "printer",
+    "newspaper advertisement",
+    "display advertisement",
+    "advertisement",
+    "advertisements",
+    "publication",
+    "publishing",
+    "public notice",
+    "tender notice",
+    "मुद्रण",
+    "छपाई",
+    "प्रकाशन",
+    "विज्ञापन",
+    "सूचना",
+    "समाचार पत्र",
 )
 
 PRODUCT_CONTEXT_TERMS: tuple[str, ...] = (

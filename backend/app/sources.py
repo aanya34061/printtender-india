@@ -6,9 +6,19 @@ NEWSPAPER_SOURCES: tuple[str, ...] = (
     "Dainik Bhaskar",
     "Patrika",
     "Nai Dunia",
-    "Navbharat",
+    "Nav Bharat",
     "Dainik Jagran",
     "Amar Ujala",
+    "Deshbandhu",
+    "Raj Express",
+    "Peoples Samachar",
+    "Dabang Dunia",
+    "Free Press Journal",
+    "Pradesh Today",
+    "Agniban",
+    "Nav Swadesh",
+    "Swadesh",
+    "Hari Bhoomi",
     "Tender Notice India",
     "India Tender Notice",
     "Public Notice India",
@@ -49,7 +59,10 @@ PORTAL_SOURCES: tuple[str, ...] = (
 
 LIVE_PORTAL_SOURCES: tuple[str, ...] = PORTAL_SOURCES
 
-ACTIVE_TENDER_SOURCES: tuple[str, ...] = PORTAL_SOURCES
+ACTIVE_TENDER_SOURCES: tuple[str, ...] = (
+    *PORTAL_SOURCES,
+    *NEWSPAPER_SOURCES,
+)
 ACTIVE_FETCH_SOURCES: tuple[str, ...] = (
     *PORTAL_SOURCES,
     *NEWSPAPER_SOURCES,
@@ -59,6 +72,9 @@ ACTIVE_FETCH_SOURCES: tuple[str, ...] = (
 SOURCE_DISPLAY_ALIASES: dict[str, str] = {
     "GeM": "gem.gov.in",
     "State-MH": "Maharashtra Tenders",
+    "Naidunia": "Nai Dunia",
+    "Rajasthan Patrika": "Patrika",
+    "Navbharat": "Nav Bharat",
 }
 
 
@@ -69,7 +85,10 @@ def display_source(source: str | None, portal_url: str | None = None) -> str | N
 
 
 def is_active_source(source: str | None) -> bool:
-    return source in ACTIVE_TENDER_SOURCES
+    return (
+        source in ACTIVE_TENDER_SOURCES
+        or canonicalize_source(source) in ACTIVE_TENDER_SOURCES
+    )
 
 
 def canonicalize_source(source: str | None) -> str | None:
@@ -87,4 +106,10 @@ def expand_source_filter(source: str | None) -> tuple[str, ...]:
         return ("GeM",)
     if source == "Maharashtra Tenders":
         return ("Maharashtra Tenders", "State-MH")
+    if source in ("Nai Dunia", "Naidunia"):
+        return ("Nai Dunia", "Naidunia")
+    if source in ("Patrika", "Rajasthan Patrika"):
+        return ("Patrika", "Rajasthan Patrika")
+    if source in ("Nav Bharat", "Navbharat"):
+        return ("Nav Bharat", "Navbharat")
     return (source,)
