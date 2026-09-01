@@ -13,13 +13,16 @@ const STATES = [
 ];
 
 const DEADLINE_OPTS = [
+  { label: "All Deadlines", value: null },
   { label: "Today only", value: 1 },
   { label: "Within 3 days", value: 3 },
   { label: "Within 7 days", value: 7 },
   { label: "Within 30 days", value: 30 },
+  { label: "Within 90 days", value: 90 },
 ];
 
 const VALUE_OPTS = [
+  { label: "All Values", min: null, max: null },
   { label: "Under ₹1 Lakh", min: null, max: 100_000 },
   { label: "₹1–10 Lakh", min: 100_000, max: 1_000_000 },
   { label: "₹10–50 Lakh", min: 1_000_000, max: 5_000_000 },
@@ -51,7 +54,7 @@ export default function FilterRow() {
 
   const activeCount =
     [state, portal].filter(Boolean).length +
-    (deadline_within_days !== 30 ? 1 : 0) +
+    (deadline_within_days !== null ? 1 : 0) +
     (min_value !== null || max_value !== null ? 1 : 0);
 
   return (

@@ -568,7 +568,7 @@ def _build_base(
     state: str | None,
     portal: str | None,
     category: str | None,
-    deadline_within_days: int,
+    deadline_within_days: int | None,
     min_value: float | None,
     max_value: float | None,
 ) -> Select[tuple[Tender]]:
@@ -588,13 +588,19 @@ def _build_base(
             | (keywords_text.ilike(ilike_pattern))
         )
 
-    deadline_predicate = or_(
-        Tender.bid_end_date.is_(None),
-        (
-            (Tender.bid_end_date > now)
-            & (Tender.bid_end_date <= now + text(f"interval '{deadline_within_days} days'"))
-        ),
-    )
+    if deadline_within_days is not None:
+        deadline_predicate = or_(
+            Tender.bid_end_date.is_(None),
+            (
+                (Tender.bid_end_date > now)
+                & (Tender.bid_end_date <= now + text(f"interval '{deadline_within_days} days'"))
+            ),
+        )
+    else:
+        deadline_predicate = or_(
+            Tender.bid_end_date.is_(None),
+            Tender.bid_end_date > now,
+        )
     qry = qry.where(deadline_predicate).where(Tender.is_active.is_(True))
     qry = qry.where(Tender.portal_source.in_(ACTIVE_TENDER_SOURCES))
     qry = qry.where(build_printing_relevance_predicate(Tender))
@@ -640,7 +646,7 @@ async def count_tenders(
     state: str | None = None,
     portal: str | None = None,
     category: str | None = None,
-    deadline_within_days: int = Query(default=30, ge=1),
+    deadline_within_days: int | None = Query(default=None, ge=1),
     min_value: float | None = None,
     max_value: float | None = None,
     session: AsyncSession = Depends(get_db),
@@ -694,7 +700,7 @@ async def list_tenders(
     state: str | None = None,
     portal: str | None = None,
     category: str | None = None,
-    deadline_within_days: int = Query(default=30, ge=1),
+    deadline_within_days: int | None = Query(default=None, ge=1),
     min_value: float | None = None,
     max_value: float | None = None,
     sort: SortOption = "deadline_asc",

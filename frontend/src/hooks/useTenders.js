@@ -9,7 +9,7 @@ export function fetchTenders(filters) {
       q: filters.q || undefined,
       state: filters.state || undefined,
       portal: filters.portal || undefined,
-      deadline_within_days: filters.deadline_within_days || 30,
+      deadline_within_days: filters.deadline_within_days || undefined,
       min_value: filters.min_value || undefined,
       max_value: filters.max_value || undefined,
       sort: filters.sort || "deadline_asc",

@@ -7,7 +7,7 @@ export const useFilterStore = create((set) => ({
   portal: null,
   // categories now supports multiple selections
   categories: [],
-  deadline_within_days: 30,
+  deadline_within_days: null,
   min_value: null,
   max_value: null,
   sort: "deadline_asc",
@@ -29,7 +29,7 @@ export const useFilterStore = create((set) => ({
   setSort: (sort) => set({ sort, page: 1 }),
   setPage: (page) => set({ page }),
   resetFilters: () =>
-    set({ q: "", state: null, portal: null, categories: [], deadline_within_days: 30,
+    set({ q: "", state: null, portal: null, categories: [], deadline_within_days: null,
           min_value: null, max_value: null, sort: "deadline_asc", page: 1, limit: 6 }),
 }));
 
