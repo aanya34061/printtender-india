@@ -134,3 +134,17 @@ async def fetch_status() -> dict:
         "status": "running" if running else "idle",
         "scope": _running_scope if running else None,
     }
+
+
+@router.api_route("/cache-clear", methods=["GET", "POST"])
+async def clear_fetch_cache() -> dict:
+    from app.api.stats import clear_stats_cache
+    from app.api.tenders import clear_tender_list_cache
+    from app.fallback_mp import _SEARCH_CACHE
+    from app.fetchers.banks import HTML_CACHE
+
+    clear_tender_list_cache()
+    clear_stats_cache()
+    HTML_CACHE.clear()
+    _SEARCH_CACHE.clear()
+    return {"status": "ok", "message": "All backend caches cleared"}
