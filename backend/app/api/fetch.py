@@ -148,3 +148,36 @@ async def clear_fetch_cache() -> dict:
     HTML_CACHE.clear()
     _SEARCH_CACHE.clear()
     return {"status": "ok", "message": "All backend caches cleared"}
+
+
+@router.post("/ingest")
+async def ingest_tenders(
+    payload: dict,
+    authorization: str | None = Header(default=None),
+) -> dict:
+    expected = get_settings().CRON_SECRET
+    if expected and authorization != f"Bearer {expected}":
+        raise HTTPException(status_code=401, detail="Unauthorized ingest request")
+
+    raw_tenders = payload.get("tenders") or []
+    if not isinstance(raw_tenders, list):
+        raise HTTPException(status_code=400, detail="Invalid tenders list")
+
+    from app.processing.normaliser import normalise_tender
+    from app.processing.deduplicator import deduplicate_tenders
+    from app.tasks.fetch_job import _upsert_tenders
+    from app.api.stats import clear_stats_cache
+    from app.api.tenders import clear_tender_list_cache
+
+    normalised = [normalise_tender(r) for r in raw_tenders]
+    valid = deduplicate_tenders([t for t in normalised if t is not None])
+    new_ids = await _upsert_tenders(valid)
+    clear_stats_cache()
+    clear_tender_list_cache()
+
+    return {
+        "status": "ok",
+        "received": len(raw_tenders),
+        "valid_normalized": len(valid),
+        "new_inserted": len(new_ids),
+    }
