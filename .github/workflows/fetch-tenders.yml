@@ -35,6 +35,10 @@ jobs:
       - name: Install Playwright Chromium
         run: python -m playwright install --with-deps chromium
 
+      - name: Ingest seed tenders
+        working-directory: backend
+        run: python -m app.data.ingest_seed
+
       - name: Run startup migrations and fetch cycle
         working-directory: backend
         run: |
