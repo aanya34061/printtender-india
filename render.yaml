@@ -1,77 +1,18 @@
 services:
-  # --- FastAPI web service ---
   - type: web
-    name: printtender-api
-    runtime: python
+    name: printtender-backend
+    env: python
     rootDir: backend
-    buildCommand: pip install -r requirements.txt && playwright install chromium --with-deps
-    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
-    plan: free
-    healthCheckPath: /health
+    buildCommand: "pip install -r requirements.txt && playwright install chromium --with-deps"
+    startCommand: "uvicorn app.main:app --host 0.0.0.0 --port $PORT"
     envVars:
-      - fromGroup: printtender-env
-
-  # --- Celery worker ---
-  - type: worker
-    name: printtender-worker
-    runtime: python
-    rootDir: backend
-    buildCommand: pip install -r requirements.txt && playwright install chromium --with-deps
-    startCommand: celery -A app.tasks.celery_app.celery_app worker --beat --loglevel=info --concurrency=2
-    plan: free
-    envVars:
-      - fromGroup: printtender-env
-
-  # --- Celery beat scheduler (cron every 6 h) ---
-  - type: cron
-    name: printtender-scheduler
-    runtime: python
-    rootDir: backend
-    buildCommand: pip install -r requirements.txt && playwright install chromium --with-deps
-    startCommand: python -c "import asyncio; from app.tasks.fetch_job import run_fetch_cycle; print(asyncio.run(run_fetch_cycle()))"
-    schedule: "0 */6 * * *"
-    envVars:
-      - fromGroup: printtender-env
-
-  # --- Scheduled subscriber mails: 08:00 IST (02:30 UTC) ---
-  - type: cron
-    name: printtender-mail-scheduler-main
-    runtime: python
-    rootDir: backend
-    buildCommand: pip install -r requirements.txt && playwright install chromium --with-deps
-    startCommand: python -c "import asyncio; from app.tasks.fetch_job import send_scheduled_subscriber_mails; print(asyncio.run(send_scheduled_subscriber_mails()))"
-    schedule: "30 2 * * *"
-    envVars:
-      - fromGroup: printtender-env
-
-envVarGroups:
-  - name: printtender-env
-    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
       - key: DATABASE_URL
-        sync: false
-      - key: REDIS_URL
         sync: false
       - key: RESEND_API_KEY
         sync: false
-      - key: EMAIL_FROM
+      - key: FRONTEND_URL
+        value: "https://printtender-india-frontend.vercel.app"
+      - key: BACKEND_URL
         sync: false
-      - key: SMTP_HOST
-        value: smtp.gmail.com
-      - key: SMTP_PORT
-        value: "587"
-      - key: SMTP_USERNAME
-        sync: false
-      - key: SMTP_PASSWORD
-        sync: false
-      - key: SMTP_USE_TLS
-        value: "true"
-      - key: APP_ENV
-        value: production
-      - key: ENABLE_SCHEDULED_MAILS
-        value: "false"
-      - key: FETCH_INTERVAL_HOURS
-        value: "6"
-      - key: MAX_TENDERS_PER_KEYWORD
-        value: "100"
-      - key: REQUEST_DELAY_SECONDS
-        value: "3"
