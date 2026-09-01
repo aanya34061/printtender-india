@@ -68,6 +68,7 @@ PORTAL_BASES = {
     "State-UP": "https://etender.up.nic.in/nicgep/app",
     "Maharashtra Tenders": "https://mahatenders.gov.in/nicgep/app",
     "State-MH": "https://mahatenders.gov.in/nicgep/app",
+    "State-RJ": "https://eproc.rajasthan.gov.in/nicgep/app",
 }
 PORTAL_VIEW_SOURCES = frozenset(PORTAL_BASES)
 

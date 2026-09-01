@@ -224,8 +224,12 @@ class BankPortalFetcher(BaseFetcher):
     def _fetch_lic_table(self, keyword: str) -> list[dict]:
         html = _fetch_html(self.portal.url)
         soup = BeautifulSoup(html, "lxml")
-        table = soup.select_one("table#tableID")
-        if table is None:
+        table = (
+            soup.select_one("table.tender-table")
+            or soup.select_one("table#tableID")
+            or soup.select_one("table:not([id*='archive']):not([class*='archive'])")
+        )
+        if table is None or "archive" in (table.get("id") or "").casefold():
             return []
         tenders: list[dict] = []
         seen: set[str] = set()

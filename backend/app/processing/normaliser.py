@@ -61,7 +61,7 @@ PORTAL_BASE_URLS = {
     "State-UP": "https://etender.up.nic.in",
     "State-MH": "https://mahatenders.gov.in",
     "Maharashtra Tenders": "https://mahatenders.gov.in",
-    "State-RJ": "https://sppp.rajasthan.gov.in",
+    "State-RJ": "https://eproc.rajasthan.gov.in",
     "Dainik Bhaskar": "https://www.bhaskar.com",
     "Patrika": "https://www.patrika.com",
     "Rajasthan Patrika": "https://www.patrika.com",

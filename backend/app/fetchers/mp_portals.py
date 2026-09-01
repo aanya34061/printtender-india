@@ -27,7 +27,7 @@ from app.keywords import IMAGE_PRODUCT_KEYWORDS
 
 MP_STATE = "Madhya Pradesh"
 MPTENDERS_URL = "https://mptenders.gov.in/nicgep/app"
-EPROC_MP_URL = "https://eproc.mp.gov.in/nicgep/app"
+EPROC_MP_URL = "https://mptenders.gov.in/nicgep/app"
 
 
 def _dedupe_keywords(keywords: list[str]) -> list[str]:

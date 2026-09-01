@@ -259,6 +259,13 @@ def extract_relevant_print_keywords(
     keywords = matched_print_keywords(text, keyword_hit)
     if not is_printing_relevant_text(text, keywords):
         return set()
+    title_or_ref = f"{title or ''} {ref_number or ''}".strip()
+    if (
+        not matched_print_keywords(title_or_ref, keyword_hit)
+        and not any(contains_phrase(title_or_ref, term) for term in PRINT_SERVICE_TERMS)
+        and not any(contains_phrase(title_or_ref, term) for term in PRODUCT_TERMS)
+    ):
+        return set()
     return keywords
 
 

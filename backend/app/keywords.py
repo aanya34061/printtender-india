@@ -50,6 +50,14 @@ PRODUCT_KEYWORD_CANONICAL: list[str] = [
     "pamphlets",
     "annual reports",
     "souvenir",
+    "slm",
+    "study material",
+    "question papers",
+    "answer sheets",
+    "omr sheets",
+    "degrees",
+    "iec material",
+    "publicity material",
 ]
 
 PRODUCT_KEYWORD_VARIANTS: dict[str, tuple[str, ...]] = {
@@ -78,6 +86,12 @@ PRODUCT_KEYWORD_VARIANTS: dict[str, tuple[str, ...]] = {
     "pamphlets": ("pamphlet",),
     "annual reports": ("annual report",),
     "souvenir": ("souvenirs",),
+    "slm": ("slm", "self learning material"),
+    "study material": ("study material", "study materials"),
+    "question papers": ("question paper",),
+    "answer sheets": ("answer sheet",),
+    "omr sheets": ("omr sheet",),
+    "degrees": ("degree",),
 }
 
 IMAGE_PRODUCT_KEYWORDS: list[str] = _dedupe(

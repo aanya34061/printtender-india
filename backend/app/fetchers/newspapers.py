@@ -62,7 +62,25 @@ def _fetch_html(url: str) -> str:
 
 
 GENERIC_PATHS = {"", "/", "/home", "/tenders", "/news", "/contact", "/about", "/login", "/search", "/videos", "/sports", "/local", "/pricing", "/blog"}
-DISALLOWED_PREFIXES = ("/offering", "/pricing", "/gem-services", "/services", "/news/", "/blog/", "/browse", "/plans", "/categories", "/states", "/cities", "/authorities")
+DISALLOWED_PREFIXES = ("/offering", "/pricing", "/gem-services", "/services", "/news/", "/blog/", "/browse", "/plans", "/categories", "/states", "/cities", "/authorities", "/epaper", "/epaper/")
+GENERIC_BOILERPLATE_STARTS = (
+    "indian tenders",
+    "tender results",
+    "all tenders",
+    "home",
+    "about us",
+    "contact us",
+    "privacy policy",
+    "terms of use",
+    "disclaimer",
+    "sitemap",
+    "feedback",
+    "copyright",
+    "login",
+    "type to search",
+    "search price",
+    "view all",
+)
 
 
 def _is_valid_newspaper_tender_link(href: str, base_url: str) -> bool:
@@ -75,6 +93,8 @@ def _is_valid_newspaper_tender_link(href: str, base_url: str) -> bool:
         return False
     if "tenderdekho.com" in parsed.netloc:
         return path.startswith(("tender/", "tender-detail/", "/tender/", "/tender-detail/"))
+    if "bidassist.com" in parsed.netloc:
+        return "/detail-" in path or "-tenders/" in path or "-tender/" in path
     return len(path) > 2
 
 
@@ -107,9 +127,12 @@ def _find_candidate_anchors(
         if not href or not _is_valid_newspaper_tender_link(href, base_url):
             continue
         text = (a.get_text(" ", strip=True) or "").strip()
-        if not text:
+        if not text or len(text) < 8:
             continue
-        parent = a.find_parent("tr") or a.find_parent("li") or a.find_parent("article") or a.find_parent("div") or a
+        lowered_text = text.casefold()
+        if any(lowered_text.startswith(b) for b in GENERIC_BOILERPLATE_STARTS):
+            continue
+        parent = a.find_parent(["tr", "li", "article", "section"]) or a
         context = " ".join(parent.get_text(" ", strip=True).split())
         combined = f"{text} {context}".casefold()
         if not any(k.casefold() in combined for k in NOTICE_KEYWORDS):

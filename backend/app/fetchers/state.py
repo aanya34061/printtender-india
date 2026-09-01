@@ -17,7 +17,7 @@ STATE_PORTALS = {
     "MP": "https://mptenders.gov.in/nicgep/app",
     "UP": "https://etender.up.nic.in/nicgep/app",
     "MH": "https://mahatenders.gov.in/nicgep/app",
-    "RJ": "https://sppp.rajasthan.gov.in/app",
+    "RJ": "https://eproc.rajasthan.gov.in/nicgep/app",
 }
 
 STATE_NAMES = {

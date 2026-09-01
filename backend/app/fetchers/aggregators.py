@@ -267,13 +267,16 @@ def _records_from_detail_links(
             continue
         seen_links.add(portal_url)
         context = _best_context_text(anchor)
-        detail_context = _detail_page_context(portal_url, portal_source)
+        detail_context = ""
+        # Only fetch detail page if card context is insufficient
+        if portal_source == "BidAssist" and len(context) < 40:
+            detail_context = _detail_page_context(portal_url, portal_source)
         effective_context = " ".join(
             part for part in (context, detail_context) if part
         ).strip()
         title = (
-            _detail_title(detail_context)
-            or _clean_title(anchor.get_text(" ", strip=True))
+            _clean_title(anchor.get_text(" ", strip=True))
+            or _detail_title(detail_context)
             or _title_from_context(effective_context)
         )
         if not title:
