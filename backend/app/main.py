@@ -13,10 +13,12 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.api.alerts import router as alerts_router
 from app.api.fetch import router as fetch_router
-from app.api.stats import prewarm_stats_cache, router as stats_router
-from app.api.tenders import prewarm_tender_list_cache, router as tenders_router
+from app.api.stats import clear_stats_cache, prewarm_stats_cache, router as stats_router
+from app.api.tenders import clear_tender_list_cache, prewarm_tender_list_cache, router as tenders_router
 from app.config import get_settings
 from app.database import engine, run_startup_migrations
+from app.fallback_mp import _SEARCH_CACHE
+from app.fetchers.banks import HTML_CACHE
 
 settings = get_settings()
 
@@ -59,6 +61,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -66,7 +69,26 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-app.add_middleware(GZipMiddleware, minimum_size=1000)
+
+
+@app.middleware("http")
+async def add_no_cache_headers(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
+
+
+@app.api_route("/api/cache/clear", methods=["GET", "POST"], tags=["system"])
+async def clear_all_caches() -> dict[str, str]:
+    clear_tender_list_cache()
+    clear_stats_cache()
+    HTML_CACHE.clear()
+    _SEARCH_CACHE.clear()
+    return {"status": "ok", "message": "All caches cleared"}
+
 
 app.include_router(tenders_router, prefix="/api/tenders", tags=["tenders"])
 app.include_router(alerts_router, prefix="/api/alerts", tags=["alerts"])
