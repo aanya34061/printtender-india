@@ -59,16 +59,6 @@ PORTAL_SOURCES: tuple[str, ...] = (
 
 LIVE_PORTAL_SOURCES: tuple[str, ...] = PORTAL_SOURCES
 
-ACTIVE_TENDER_SOURCES: tuple[str, ...] = (
-    *PORTAL_SOURCES,
-    *NEWSPAPER_SOURCES,
-)
-ACTIVE_FETCH_SOURCES: tuple[str, ...] = (
-    *PORTAL_SOURCES,
-    *NEWSPAPER_SOURCES,
-    "Epaper OCR",
-)
-
 SOURCE_DISPLAY_ALIASES: dict[str, str] = {
     "GeM": "gem.gov.in",
     "State-MH": "Maharashtra Tenders",
@@ -76,6 +66,19 @@ SOURCE_DISPLAY_ALIASES: dict[str, str] = {
     "Rajasthan Patrika": "Patrika",
     "Navbharat": "Nav Bharat",
 }
+
+ALL_KNOWN_SOURCES: set[str] = (
+    set(PORTAL_SOURCES)
+    | set(NEWSPAPER_SOURCES)
+    | set(SOURCE_DISPLAY_ALIASES.keys())
+    | set(SOURCE_DISPLAY_ALIASES.values())
+)
+
+ACTIVE_TENDER_SOURCES: tuple[str, ...] = tuple(sorted(ALL_KNOWN_SOURCES))
+ACTIVE_FETCH_SOURCES: tuple[str, ...] = (
+    *ACTIVE_TENDER_SOURCES,
+    "Epaper OCR",
+)
 
 
 def display_source(source: str | None, portal_url: str | None = None) -> str | None:
