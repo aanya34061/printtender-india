@@ -443,10 +443,8 @@ async def run_fetch_cycle(
             ("Public Notice India", scrape_publicnotice),
         ]
 
-        selected_print_keywords = (
-            PRINT_KEYWORDS[:max_keywords_per_source]
-            if max_keywords_per_source is not None
-            else PRINT_KEYWORDS
+        selected_print_keywords = _select_keywords(
+            PRINT_KEYWORDS, max_keywords_per_source
         )
         for keyword in selected_print_keywords:
             for label, scraper in newspaper_scrapers:

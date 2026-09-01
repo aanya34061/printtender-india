@@ -275,6 +275,7 @@ class BankPortalFetcher(BaseFetcher):
                     if part
                 )
             )
+            deadline_raw = cells[4] if len(cells) > 4 else ""
             tenders.append(
                 self.build_record(
                     ref_number=ref_number,
@@ -282,7 +283,7 @@ class BankPortalFetcher(BaseFetcher):
                     organisation=organisation,
                     state=self.portal.state,
                     portal_source=self.portal.source,
-                    deadline_raw="",
+                    deadline_raw=deadline_raw,
                     value_raw="",
                     portal_url=portal_url,
                     keyword_hit=keyword,
