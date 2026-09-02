@@ -35,6 +35,13 @@ export const PORTAL_OPTIONS = [
   "Agniban",
   "Nav Swadesh",
   "Swadesh",
-  "Hari Bhoomi",
+  "Amar Ujala",
+  "TOI Tenders",
+  "HT Tenders",
+  "ET Tenders",
+  "The Hindu Tenders",
+  "Tender Notice India",
+  "India Tender Notice",
+  "Public Notice India",
 ];
 
