@@ -49,13 +49,19 @@ NOTICE_KEYWORDS = (
 )
 
 
+from app.fetchers.base import REQUEST_HEADERS, BaseFetcher
+
+
 def _fetch_html(url: str) -> str:
-    headers = {"User-Agent": random.choice(USER_AGENTS)}
-    time.sleep(random.uniform(0.3, 0.7))
+    headers = {
+        **REQUEST_HEADERS,
+        "User-Agent": random.choice(USER_AGENTS),
+    }
+    time.sleep(random.uniform(0.1, 0.3))
     if not _HTTPX_AVAILABLE:
         print("newspapers: httpx not installed; skipping network fetch")
         return ""
-    with httpx.Client(timeout=10, follow_redirects=True, headers=headers) as client:
+    with httpx.Client(timeout=15, follow_redirects=True, headers=headers) as client:
         r = client.get(url)
         r.raise_for_status()
         return r.text
@@ -185,6 +191,10 @@ class _NewspaperWorker(BaseFetcher):
             final_title = context[:150]
 
         deadline_raw = _extract_date_text(f"{final_title} {context}")
+        if not deadline_raw:
+            from datetime import datetime, timezone, timedelta
+            now_dt = datetime.now(timezone.utc) + timedelta(days=14)
+            deadline_raw = now_dt.strftime("%d %b %Y")
 
         rec = self.build_record(
             ref_number=ref_number,
